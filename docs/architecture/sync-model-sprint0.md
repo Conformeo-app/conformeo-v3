@@ -15,6 +15,7 @@ Formaliser un contrat de synchronisation minimal, compatible avec un produit mob
 ## Entités concernées au Sprint 0
 
 - `organizations`
+- `organization_memberships`
 - `users`
 
 Le contrat est extensible à d'autres entités sans changer le protocole de base.

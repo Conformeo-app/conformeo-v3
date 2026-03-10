@@ -9,10 +9,22 @@
     "packages/*"
   ],
   "scripts": {
+    "dev:api": "uvicorn --app-dir apps/api app.main:app --reload --host 0.0.0.0 --port 8000",
+    "bootstrap:admin": "PYTHONPATH=apps/api python3 -m app.bootstrap_admin",
+    "dev:web": "pnpm --filter @conformeo/web dev",
+    "dev:mobile": "pnpm --filter @conformeo/mobile dev",
+    "build:web": "pnpm --filter @conformeo/web build",
+    "build:mobile": "pnpm --filter @conformeo/mobile build",
+    "typecheck:web": "pnpm --filter @conformeo/web typecheck",
+    "typecheck:mobile": "pnpm --filter @conformeo/mobile typecheck",
     "typecheck": "pnpm -r --if-present typecheck",
-    "check:contracts": "pnpm --filter @conformeo/contracts typecheck"
+    "check:contracts": "pnpm --filter @conformeo/contracts typecheck",
+    "check:python": "python3 -m compileall apps/api tests",
+    "test:python": "python3 -m unittest tests.test_sprint0_scaffold tests.test_auth_rbac_modules tests.test_bootstrap_admin tests.test_document_model",
+    "check:mobile:cap": "pnpm --filter @conformeo/mobile cap:sync",
+    "ci": "pnpm check:contracts && pnpm typecheck:web && pnpm typecheck:mobile && pnpm build:web && pnpm build:mobile && pnpm check:mobile:cap && pnpm check:python && pnpm test:python"
   },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "typescript": "~5.5.4"
   }
 }

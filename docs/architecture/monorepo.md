@@ -9,10 +9,11 @@ Poser une structure de dépôt simple et stable pour démarrer Conforméo sans l
 ```text
 apps/
   api/         FastAPI + modèles PostgreSQL + migrations
-  mobile/      future application Ionic/Capacitor/Angular
-  web/         future application Angular desktop
+  mobile/      squelette Ionic/Capacitor/Angular minimal
+  web/         squelette Angular desktop minimal
 packages/
   contracts/   contrats TypeScript partagés
+  ui/          primitives UI Angular partagées
 docs/
   architecture/ documents de cadrage technique
 tests/         vérifications structurelles Sprint 0
@@ -20,9 +21,11 @@ tests/         vérifications structurelles Sprint 0
 
 ## Principes
 
-- `apps/web` et `apps/mobile` sont réservés mais non bootstrapés en Sprint 0.
+- `apps/web` contient désormais un squelette Angular minimal.
+- `apps/mobile` contient désormais un squelette Ionic + Capacitor + Angular minimal.
 - `apps/api` contient le socle FastAPI minimal et les premiers modèles persistance.
 - `packages/contracts` porte les contrats partagés de niveau Sprint 0.
+- `packages/ui` porte un design system Angular minimal partagé entre `web` et `mobile`.
 - Les modèles métier restent petits et compatibles avec une montée en charge incrémentale.
 
 ## Décisions explicites
@@ -34,8 +37,15 @@ tests/         vérifications structurelles Sprint 0
 
 ## Ce qui est différé
 
-- Bootstrap effectif Angular desktop.
-- Bootstrap effectif Ionic/Capacitor mobile.
-- CI, linting complet et outillage de build.
-- Modules métier Réglementation, Chantier, Facturation.
-- Modèle d'appartenance organisationnelle, rôles et permissions.
+- linting complet et outillage de build plus avancé.
+- modules métier Réglementation, Chantier, Facturation.
+- rôles fins, permissions et auth complète.
+
+## CI Sprint 0
+
+Une CI minimale existe maintenant pour vérifier le socle :
+- contrats TypeScript
+- typecheck et build `web`
+- typecheck et build `mobile`
+- `cap:sync` mobile
+- vérifications Python et tests Sprint 0

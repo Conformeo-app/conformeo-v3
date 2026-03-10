@@ -1,0 +1,31 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "./out-tsc",
+    "types": [],
+    "paths": {
+      "@angular/common": [
+        "./node_modules/@angular/common"
+      ],
+      "@angular/core": [
+        "./node_modules/@angular/core"
+      ],
+      "@angular/forms": [
+        "./node_modules/@angular/forms"
+      ],
+      "@conformeo/ui": [
+        "../../packages/ui/src/index.ts"
+      ],
+      "@conformeo/ui/*": [
+        "../../packages/ui/src/*"
+      ]
+    }
+  },
+  "files": [],
+  "references": [
+    {
+      "path": "./tsconfig.app.json"
+    }
+  ]
+}

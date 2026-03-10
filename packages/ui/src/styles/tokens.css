@@ -1,0 +1,16 @@
+:root {
+  --cfm-font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --cfm-color-primary: #1d6d64;
+  --cfm-color-primary-strong: #154f49;
+  --cfm-color-ink: #10222b;
+  --cfm-color-copy: #31515f;
+  --cfm-color-copy-muted: #4c6471;
+  --cfm-color-surface: #fffdfa;
+  --cfm-color-surface-muted: #d9e4e7;
+  --cfm-color-border: #bfd3cf;
+  --cfm-color-danger: #b03d2e;
+  --cfm-radius-field: 14px;
+  --cfm-radius-panel: 24px;
+  --cfm-radius-pill: 999px;
+  --cfm-shadow-card: 0 20px 60px rgba(18, 33, 42, 0.08);
+}

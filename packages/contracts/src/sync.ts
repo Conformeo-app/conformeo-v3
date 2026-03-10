@@ -1,6 +1,10 @@
 import type { EntityId, IsoDateTime } from "./common";
 
-export type SyncEntityName = "organizations" | "users";
+export type SyncEntityName =
+  | "organizations"
+  | "organization_memberships"
+  | "organization_modules"
+  | "users";
 export type SyncOperation = "upsert" | "delete";
 export type SyncItemState = "pending" | "in_flight" | "synced" | "conflict" | "failed";
 export type SyncPushState = "accepted" | "conflict" | "rejected";

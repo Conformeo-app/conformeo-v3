@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
+
+if TYPE_CHECKING:
+    from app.db.models.document import Document
+    from app.db.models.organization_module import OrganizationModule
+    from app.db.models.organization_membership import OrganizationMembership
 
 
 class OrganizationStatus(str, enum.Enum):
@@ -38,3 +44,15 @@ class Organization(Base, IdentifiedModel, AuditModel, VersionedModel):
         server_default="Europe/Paris",
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    memberships: Mapped[list["OrganizationMembership"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    modules: Mapped[list["OrganizationModule"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    documents: Mapped[list["Document"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
