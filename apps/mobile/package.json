@@ -1,0 +1,9 @@
+{
+  "name": "@conformeo/mobile",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Placeholder Sprint 0 pour l'application mobile Ionic/Capacitor/Angular",
+  "scripts": {
+    "bootstrap": "echo \"Bootstrap Ionic/Angular reporte au sprint suivant\""
+  }
+}

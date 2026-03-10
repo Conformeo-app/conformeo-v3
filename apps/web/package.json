@@ -1,0 +1,9 @@
+{
+  "name": "@conformeo/web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Placeholder Sprint 0 pour l'application desktop Angular",
+  "scripts": {
+    "bootstrap": "echo \"Bootstrap Angular web reporte au sprint suivant\""
+  }
+}
