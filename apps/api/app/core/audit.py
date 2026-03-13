@@ -44,12 +44,18 @@ def list_audit_logs(
     organization_id: UUID,
     *,
     limit: int = 50,
+    target_id: UUID | None = None,
+    target_types: list[str] | None = None,
 ) -> list[AuditLog]:
     safe_limit = min(max(limit, 1), 100)
+    query = select(AuditLog).where(AuditLog.organization_id == organization_id)
+    if target_id is not None:
+        query = query.where(AuditLog.target_id == target_id)
+    if target_types:
+        query = query.where(AuditLog.target_type.in_(target_types))
     return (
         db.execute(
-            select(AuditLog)
-            .where(AuditLog.organization_id == organization_id)
+            query
             .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc())
             .limit(safe_limit)
         )

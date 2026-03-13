@@ -8,12 +8,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.access import list_organization_modules, resolve_permissions
+from app.core.access import get_module_by_code, list_organization_modules, resolve_permissions
 from app.core.config import get_settings
 from app.core.security import SecurityError, decode_access_token
 from app.db.models import (
     Organization,
     OrganizationMembership,
+    OrganizationModuleCode,
     OrganizationStatus,
     User,
     UserStatus,
@@ -22,6 +23,12 @@ from app.db.session import get_db_session
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+MODULE_LABELS: dict[OrganizationModuleCode, str] = {
+    OrganizationModuleCode.REGLEMENTATION: "Réglementation",
+    OrganizationModuleCode.CHANTIER: "Chantier",
+    OrganizationModuleCode.FACTURATION: "Facturation",
+}
 
 
 @dataclass(frozen=True)
@@ -147,6 +154,24 @@ def require_permissions(*required_permissions: str):
         missing = [permission for permission in required_permissions if permission not in context.permissions]
         if missing:
             raise _forbidden("Permissions insuffisantes pour cette operation.")
+        return context
+
+    return dependency
+
+
+def require_module_enabled(
+    module_code: OrganizationModuleCode,
+    *required_permissions: str,
+):
+    def dependency(
+        context: OrganizationAccessContext = Depends(require_permissions(*required_permissions)),
+        db: Session = Depends(get_db_session),
+    ) -> OrganizationAccessContext:
+        modules = list_organization_modules(db, context.organization.id)
+        module = get_module_by_code(modules, module_code)
+        if module is None or not module.is_enabled:
+            module_label = MODULE_LABELS.get(module_code, module_code.value)
+            raise _forbidden(f"Le module {module_label} n'est pas activé pour cette organisation.")
         return context
 
     return dependency

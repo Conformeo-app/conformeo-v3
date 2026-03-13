@@ -32,6 +32,18 @@ Chaque entree d'audit stocke :
   - creation des `organization_modules`
 - activation / desactivation d'un module d'organisation
 
+## Extension Facturation Sprint 3
+
+Le meme socle d'audit est reutilise pour la facturation, sans journal comptable expert.
+
+Actions tracees minimalement :
+- creation et mise a jour d'un client
+- creation d'un devis
+- creation d'une facture
+- changement de statut d'un devis ou d'une facture
+- enregistrement d'un paiement simple
+- rattachement ou changement de chantier sur un devis ou une facture
+
 ## Lecture minimale
 
 Le backend expose `GET /organizations/{organization_id}/audit-logs?limit=50`.

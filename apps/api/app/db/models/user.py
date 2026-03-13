@@ -4,10 +4,10 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, String
+from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
+from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel, postgres_enum
 
 if TYPE_CHECKING:
     from app.db.models.document import Document
@@ -30,7 +30,7 @@ class User(Base, IdentifiedModel, AuditModel, VersionedModel):
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
-        Enum(UserStatus, name="user_status"),
+        postgres_enum(UserStatus, name="user_status"),
         nullable=False,
         default=UserStatus.INVITED,
         server_default=UserStatus.INVITED.value,

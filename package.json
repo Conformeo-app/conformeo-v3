@@ -20,7 +20,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "check:contracts": "pnpm --filter @conformeo/contracts typecheck",
     "check:python": "python3 -m compileall apps/api tests",
-    "test:python": "python3 -m unittest tests.test_sprint0_scaffold tests.test_auth_rbac_modules tests.test_bootstrap_admin tests.test_document_model",
+    "test:python": "python3 -m unittest tests.test_sprint0_scaffold tests.test_auth_rbac_modules tests.test_bootstrap_admin tests.test_document_model tests.test_worksite_import_api tests.test_regulation_foundation_api tests.test_billing_api tests.test_postgres_enum_mapping",
     "check:mobile:cap": "pnpm --filter @conformeo/mobile cap:sync",
     "ci": "pnpm check:contracts && pnpm typecheck:web && pnpm typecheck:mobile && pnpm build:web && pnpm build:mobile && pnpm check:mobile:cap && pnpm check:python && pnpm test:python"
   },

@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, String, Uuid, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.models.base import Base, IdentifiedModel
+from app.db.models.base import Base, IdentifiedModel, postgres_enum
 
 
 class AuditAction(str, enum.Enum):
@@ -47,7 +47,7 @@ class AuditLog(Base, IdentifiedModel):
         server_default="system",
     )
     action_type: Mapped[AuditAction] = mapped_column(
-        Enum(AuditAction, name="audit_action"),
+        postgres_enum(AuditAction, name="audit_action"),
         nullable=False,
     )
     target_type: Mapped[str] = mapped_column(String(64), nullable=False)

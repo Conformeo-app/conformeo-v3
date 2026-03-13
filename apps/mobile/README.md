@@ -29,6 +29,23 @@ Sprint 0 pose aussi une base locale mobile via SQLite :
 
 La surface UI actuelle expose seulement une démonstration de lecture / écriture locale et de queue locale pour valider le socle offline-first, sans ouvrir encore les workflows chantier ni la synchronisation distante.
 
+Sprint 1 ouvre un premier bloc Chantier mobile :
+- liste locale de chantiers
+- fiche chantier essentielle
+- action `Préparer hors ligne` qui embarque les données utiles du chantier sur l'appareil
+- consultation des chantiers déjà disponibles sans réseau
+- import read-only des résumés chantier depuis l'API avec persistance locale
+- liste d'équipements utiles liée au chantier, consultable hors ligne avec nom, type et statut simple
+- mouvements simples d'équipement enregistrés localement avec horodatage, auteur et statut de synchronisation
+- capture de photo preuve horodatée, liée à un chantier, stockée immédiatement sur l'appareil
+- commentaire texte court sur photo preuve, stocké localement et modifiable sur l'appareil
+- note vocale chantier enregistrée localement, relisible hors ligne et suivie par l'état local de synchronisation
+- checklist sécurité simple liée au chantier, remplissable hors ligne avec statut brouillon ou validé
+- signalement de risque chantier, stocké localement avec type, note courte, gravité simple et photo optionnelle
+- signature simple tactile, liée au chantier, stockée localement et visible immédiatement sur l'appareil
+- préparation locale consolidée des synchronisations terrain pour preuves, notes, checklist, signalements et signatures
+- état de synchronisation lisible et harmonisé au niveau chantier, objet terrain et lot préparé
+
 Sprint 0 utilise aussi `@conformeo/ui` pour partager quelques primitives Angular simples :
 - `Button`
 - `Input`

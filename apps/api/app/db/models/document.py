@@ -5,10 +5,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
+from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel, postgres_enum
 
 if TYPE_CHECKING:
     from app.db.models.organization import Organization
@@ -55,7 +55,7 @@ class Document(Base, IdentifiedModel, AuditModel, VersionedModel):
         server_default="upload",
     )
     status: Mapped[DocumentStatus] = mapped_column(
-        Enum(DocumentStatus, name="document_status"),
+        postgres_enum(DocumentStatus, name="document_status"),
         nullable=False,
         default=DocumentStatus.AVAILABLE,
         server_default=DocumentStatus.AVAILABLE.value,

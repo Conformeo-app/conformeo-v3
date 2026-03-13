@@ -1,15 +1,30 @@
 from __future__ import annotations
 
+import enum
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Integer, Uuid, func, text
+from sqlalchemy import DateTime, Enum as SqlEnum, Integer, Uuid, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+EnumT = TypeVar("EnumT", bound=enum.Enum)
 
 
 class Base(DeclarativeBase):
     """Base déclarative commune."""
+
+
+def postgres_enum(enum_cls: type[EnumT], *, name: str) -> SqlEnum:
+    """Mappe un enum Python sur les labels existants PostgreSQL via item.value."""
+
+    return SqlEnum(
+        enum_cls,
+        name=name,
+        values_callable=lambda values_enum_cls: [item.value for item in values_enum_cls],
+        validate_strings=True,
+    )
 
 
 class IdentifiedModel:

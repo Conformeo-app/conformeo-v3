@@ -4,10 +4,10 @@ import enum
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, Enum, ForeignKey, UniqueConstraint, Uuid, text
+from sqlalchemy import Boolean, ForeignKey, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
+from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel, postgres_enum
 
 if TYPE_CHECKING:
     from app.db.models.organization import Organization
@@ -35,7 +35,7 @@ class OrganizationModule(Base, IdentifiedModel, AuditModel, VersionedModel):
         nullable=False,
     )
     module_code: Mapped[OrganizationModuleCode] = mapped_column(
-        Enum(OrganizationModuleCode, name="organization_module_code"),
+        postgres_enum(OrganizationModuleCode, name="organization_module_code"),
         nullable=False,
     )
     is_enabled: Mapped[bool] = mapped_column(
