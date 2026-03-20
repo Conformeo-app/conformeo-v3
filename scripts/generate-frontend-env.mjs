@@ -58,7 +58,7 @@ function normalizeAppEnv(value) {
 }
 
 function normalizeApiBaseUrl(value) {
-  const resolved = value && value.length > 0 ? value : "http://localhost:8000";
+  const resolved = value && value.length > 0 ? value : "http://127.0.0.1:8000";
   return resolved.replace(/\/+$/u, "");
 }
 

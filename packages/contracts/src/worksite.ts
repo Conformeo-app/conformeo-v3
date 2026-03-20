@@ -1,6 +1,9 @@
 import type { EntityId, IsoDateTime } from "./common";
+import type { DocumentLifecycleStatus, DocumentStatus } from "./document";
 
 export type WorksiteStatus = "planned" | "in_progress" | "blocked" | "completed";
+export type WorksiteCoordinationTargetType = "worksite" | "worksite_document";
+export type WorksiteCoordinationStatus = "todo" | "in_progress" | "done";
 export type WorksiteChecklistItemStatus = "todo" | "done" | "attention";
 export type WorksiteLocalSyncStatus = "local_only" | "pending_sync" | "synced";
 export type WorksiteProofStatus = WorksiteLocalSyncStatus;
@@ -14,6 +17,28 @@ export type WorksiteSafetyChecklistStatus = "draft" | "validated";
 export type WorksiteRiskType = "fall" | "slip" | "electrical" | "traffic" | "other";
 export type WorksiteRiskSeverity = "low" | "medium" | "high";
 
+export interface WorksiteCoordinationRecord {
+  target_type: WorksiteCoordinationTargetType;
+  target_id: EntityId;
+  status: WorksiteCoordinationStatus;
+  assignee_user_id: EntityId | null;
+  assignee_display_name: string | null;
+  comment_text: string | null;
+  updated_at: IsoDateTime | null;
+}
+
+export interface WorksiteCoordinationUpdateRequest {
+  status: WorksiteCoordinationStatus;
+  assignee_user_id: EntityId | null;
+  comment_text: string | null;
+}
+
+export interface WorksiteAssigneeRecord {
+  user_id: EntityId;
+  display_name: string;
+  role_code: string;
+}
+
 export interface WorksiteApiSummary {
   id: EntityId;
   organization_id: EntityId;
@@ -23,6 +48,83 @@ export interface WorksiteApiSummary {
   status: WorksiteStatus;
   planned_for: IsoDateTime | null;
   updated_at: IsoDateTime;
+  coordination: WorksiteCoordinationRecord;
+}
+
+export interface WorksitePreventionPlanExportRequest {
+  useful_date: string | null;
+  intervention_context: string | null;
+  vigilance_points: string[];
+  measure_points: string[];
+  additional_contact: string | null;
+}
+
+export interface WorksiteDocumentRecord {
+  id: EntityId;
+  version: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  deleted_at: IsoDateTime | null;
+  worksite_id: EntityId;
+  worksite_name: string;
+  document_type: string;
+  document_type_label: string;
+  source: string;
+  lifecycle_status: DocumentLifecycleStatus;
+  linked_signature_id: EntityId | null;
+  linked_signature_label: string | null;
+  linked_signature_file_name: string | null;
+  linked_signature_uploaded_at: IsoDateTime | null;
+  linked_proofs: WorksiteProofRecord[];
+  status: DocumentStatus;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  has_stored_file: boolean;
+  uploaded_at: IsoDateTime | null;
+  notes: string | null;
+  coordination: WorksiteCoordinationRecord;
+}
+
+export interface WorksiteDocumentStatusUpdateRequest {
+  lifecycle_status: DocumentLifecycleStatus;
+}
+
+export interface WorksiteSignatureRecord {
+  id: EntityId;
+  version: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  deleted_at: IsoDateTime | null;
+  worksite_id: EntityId;
+  worksite_name: string;
+  label: string;
+  file_name: string;
+  status: DocumentStatus;
+  uploaded_at: IsoDateTime | null;
+}
+
+export interface WorksiteDocumentSignatureUpdateRequest {
+  signature_document_id: EntityId | null;
+}
+
+export interface WorksiteDocumentProofUpdateRequest {
+  proof_document_ids: EntityId[];
+}
+
+export interface WorksiteProofRecord {
+  id: EntityId;
+  version: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  deleted_at: IsoDateTime | null;
+  worksite_id: EntityId;
+  worksite_name: string;
+  label: string;
+  file_name: string;
+  status: DocumentStatus;
+  uploaded_at: IsoDateTime | null;
+  notes: string | null;
 }
 
 export interface WorksiteSummary extends WorksiteApiSummary {

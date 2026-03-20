@@ -3,6 +3,7 @@ import type {
   BillingCustomerCreateRequest,
   BillingCustomerRecord,
   BillingCustomerUpdateRequest,
+  CockpitSummaryRecord,
   BuildingSafetyAlertRecord,
   BuildingSafetyItemCreateRequest,
   BuildingSafetyItemRecord,
@@ -31,9 +32,22 @@ import type {
   QuoteUpdateRequest,
   QuoteWorksiteLinkUpdateRequest,
   InvoiceWorksiteLinkUpdateRequest,
-  WorksiteApiSummary
+  WorksiteApiSummary,
+  WorksiteAssigneeRecord,
+  WorksiteCoordinationUpdateRequest,
+  WorksiteDocumentProofUpdateRequest,
+  WorksiteDocumentStatusUpdateRequest,
+  WorksiteDocumentSignatureUpdateRequest,
+  WorksiteDocumentRecord,
+  WorksiteProofRecord,
+  WorksitePreventionPlanExportRequest,
+  WorksiteSignatureRecord
 } from "@conformeo/contracts";
 import { generatedEnv } from "../environments/generated-env";
+import { ApiClientError, createHttpApiError, createNetworkApiError, createTimeoutApiError } from "./api-error";
+
+const WORKSPACE_REQUEST_TIMEOUT_MS = 10000;
+const REGULATORY_WORKSPACE_TIMEOUT_MS = 7000;
 
 function getApiBaseUrl(): string {
   return generatedEnv.apiBaseUrl.replace(/\/$/, "");
@@ -48,13 +62,93 @@ function buildHeaders(accessToken: string, organizationId: string): HeadersInit 
 }
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
-  const payload = await response.json().catch(() => null);
+  const rawText = await response.text();
+  const trimmedText = rawText.replace(/^\uFEFF/, "").trim();
+  let payload: unknown = null;
+
+  if (trimmedText) {
+    try {
+      payload = JSON.parse(trimmedText);
+    } catch {
+      payload = null;
+    }
+  }
+
   if (!response.ok) {
     const detail =
       payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
-    throw new Error(detail);
+    throw createHttpApiError(response.status, detail);
   }
+
+  if (payload === null) {
+    throw new Error("La réponse du serveur est incomplète ou illisible.");
+  }
+
   return payload as T;
+}
+
+type JsonRequestOptions = {
+  timeoutMs?: number;
+  timeoutLabel?: string;
+};
+
+async function requestJson<T>(input: string, init: RequestInit, options: JsonRequestOptions = {}): Promise<T> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const controller =
+    options.timeoutMs && typeof AbortController !== "undefined"
+      ? new AbortController()
+      : null;
+  const timeoutId =
+    controller && options.timeoutMs
+      ? globalThis.setTimeout(() => {
+          controller.abort();
+        }, options.timeoutMs)
+      : null;
+
+  try {
+    const response = await fetch(input, {
+      ...init,
+      signal: controller?.signal,
+    });
+
+    const rawText = await response.text();
+    const trimmedText = rawText.replace(/^\uFEFF/, "").trim();
+    let payload: unknown = null;
+
+    if (trimmedText) {
+      payload = JSON.parse(trimmedText);
+    }
+
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
+      throw createHttpApiError(response.status, detail);
+    }
+
+    if (payload === null) {
+      throw new Error("La réponse du serveur est incomplète ou illisible.");
+    }
+
+    return payload as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw createTimeoutApiError(options.timeoutLabel ?? "La requête API", options.timeoutMs ?? REGULATORY_WORKSPACE_TIMEOUT_MS);
+    }
+
+    if (error instanceof Error && error.name === "AbortError") {
+      throw createTimeoutApiError(options.timeoutLabel ?? "La requête API", options.timeoutMs ?? REGULATORY_WORKSPACE_TIMEOUT_MS);
+    }
+
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+
+    throw createNetworkApiError(getApiBaseUrl());
+  } finally {
+    if (timeoutId !== null) {
+      globalThis.clearTimeout(timeoutId);
+    }
+  }
 }
 
 function parseFilename(contentDisposition: string | null, fallback: string): string {
@@ -73,11 +167,26 @@ export async function fetchOrganizationProfile(
   accessToken: string,
   organizationId: string
 ): Promise<OrganizationRecord> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/profile`, {
+  return requestJson<OrganizationRecord>(`${getApiBaseUrl()}/organizations/${organizationId}/profile`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "du profil organisation",
   });
-  return parseJsonResponse<OrganizationRecord>(response);
+}
+
+export async function fetchCockpitSummary(
+  accessToken: string,
+  organizationId: string
+): Promise<CockpitSummaryRecord> {
+  return requestJson<CockpitSummaryRecord>(`${getApiBaseUrl()}/organizations/${organizationId}/cockpit-summary`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "du cockpit",
+  });
 }
 
 export async function updateOrganizationProfile(
@@ -100,22 +209,26 @@ export async function listOrganizationSites(
   accessToken: string,
   organizationId: string
 ): Promise<OrganizationSiteRecord[]> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/sites`, {
+  return requestJson<OrganizationSiteRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/sites`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des sites",
   });
-  return parseJsonResponse<OrganizationSiteRecord[]>(response);
 }
 
 export async function fetchOrganizationRegulatoryProfile(
   accessToken: string,
   organizationId: string
 ): Promise<OrganizationRegulatoryProfileRecord> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/regulatory-profile`, {
+  return requestJson<OrganizationRegulatoryProfileRecord>(`${getApiBaseUrl()}/organizations/${organizationId}/regulatory-profile`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "du profil réglementaire",
   });
-  return parseJsonResponse<OrganizationRegulatoryProfileRecord>(response);
 }
 
 export async function listBuildingSafetyItems(
@@ -124,11 +237,13 @@ export async function listBuildingSafetyItems(
   siteId?: string | null
 ): Promise<BuildingSafetyItemRecord[]> {
   const suffix = siteId ? `?site_id=${encodeURIComponent(siteId)}` : "";
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/building-safety-items${suffix}`, {
+  return requestJson<BuildingSafetyItemRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/building-safety-items${suffix}`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des éléments sécurité bâtiment",
   });
-  return parseJsonResponse<BuildingSafetyItemRecord[]>(response);
 }
 
 export async function listBuildingSafetyAlerts(
@@ -137,22 +252,236 @@ export async function listBuildingSafetyAlerts(
   siteId?: string | null
 ): Promise<BuildingSafetyAlertRecord[]> {
   const suffix = siteId ? `?site_id=${encodeURIComponent(siteId)}` : "";
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/building-safety-alerts${suffix}`, {
+  return requestJson<BuildingSafetyAlertRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/building-safety-alerts${suffix}`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: REGULATORY_WORKSPACE_TIMEOUT_MS,
+    timeoutLabel: "des alertes sécurité bâtiment",
   });
-  return parseJsonResponse<BuildingSafetyAlertRecord[]>(response);
 }
 
 export async function listWorksites(
   accessToken: string,
   organizationId: string
 ): Promise<WorksiteApiSummary[]> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites`, {
+  return requestJson<WorksiteApiSummary[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksites`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des chantiers",
+  });
+}
+
+export async function listWorksiteAssignees(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteAssigneeRecord[]> {
+  return requestJson<WorksiteAssigneeRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-assignees`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des affectations chantier",
+  });
+}
+
+export async function listWorksiteDocuments(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteDocumentRecord[]> {
+  return requestJson<WorksiteDocumentRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des documents chantier",
+  });
+}
+
+export async function downloadGeneratedWorksiteDocument(
+  accessToken: string,
+  organizationId: string,
+  documentId: string
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents/${documentId}/download`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
   });
-  return parseJsonResponse<WorksiteApiSummary[]>(response);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
+    throw createHttpApiError(response.status, detail);
+  }
+  return {
+    blob: await response.blob(),
+    fileName: parseFilename(response.headers.get("Content-Disposition"), "document-chantier.pdf")
+  };
+}
+
+export async function listWorksiteSignatures(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteSignatureRecord[]> {
+  return requestJson<WorksiteSignatureRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-signatures`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des signatures chantier",
+  });
+}
+
+export async function listWorksiteProofs(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteProofRecord[]> {
+  return requestJson<WorksiteProofRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-proofs`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des preuves chantier",
+  });
+}
+
+export async function updateWorksiteDocumentStatus(
+  accessToken: string,
+  organizationId: string,
+  documentId: string,
+  payload: WorksiteDocumentStatusUpdateRequest
+): Promise<WorksiteDocumentRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents/${documentId}/status`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteDocumentRecord>(response);
+}
+
+export async function updateWorksiteDocumentSignature(
+  accessToken: string,
+  organizationId: string,
+  documentId: string,
+  payload: WorksiteDocumentSignatureUpdateRequest
+): Promise<WorksiteDocumentRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents/${documentId}/signature`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteDocumentRecord>(response);
+}
+
+export async function updateWorksiteDocumentProofs(
+  accessToken: string,
+  organizationId: string,
+  documentId: string,
+  payload: WorksiteDocumentProofUpdateRequest
+): Promise<WorksiteDocumentRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents/${documentId}/proofs`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteDocumentRecord>(response);
+}
+
+export async function updateWorksiteCoordination(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string,
+  payload: WorksiteCoordinationUpdateRequest
+): Promise<WorksiteApiSummary> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/coordination`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteApiSummary>(response);
+}
+
+export async function updateWorksiteDocumentCoordination(
+  accessToken: string,
+  organizationId: string,
+  documentId: string,
+  payload: WorksiteCoordinationUpdateRequest
+): Promise<WorksiteDocumentRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-documents/${documentId}/coordination`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteDocumentRecord>(response);
+}
+
+export async function downloadWorksiteSummaryPdf(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/summary.pdf`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
+    throw createHttpApiError(response.status, detail);
+  }
+  return {
+    blob: await response.blob(),
+    fileName: parseFilename(response.headers.get("Content-Disposition"), "fiche-chantier.pdf")
+  };
+}
+
+export async function downloadWorksitePreventionPlanPdf(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string,
+  payload?: WorksitePreventionPlanExportRequest
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/prevention-plan.pdf`,
+    {
+      method: payload ? "POST" : "GET",
+      headers: payload
+        ? {
+            ...buildHeaders(accessToken, organizationId),
+            "Content-Type": "application/json"
+          }
+        : buildHeaders(accessToken, organizationId),
+      body: payload ? JSON.stringify(payload) : undefined
+    }
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
+    throw createHttpApiError(response.status, detail);
+  }
+  return {
+    blob: await response.blob(),
+    fileName: parseFilename(response.headers.get("Content-Disposition"), "plan-prevention.pdf")
+  };
 }
 
 export async function createOrganizationSite(
@@ -175,11 +504,13 @@ export async function listBillingCustomers(
   accessToken: string,
   organizationId: string
 ): Promise<BillingCustomerRecord[]> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/customers`, {
+  return requestJson<BillingCustomerRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/customers`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des clients",
   });
-  return parseJsonResponse<BillingCustomerRecord[]>(response);
 }
 
 export async function listAuditLogs(
@@ -308,11 +639,13 @@ export async function listQuotes(
   accessToken: string,
   organizationId: string
 ): Promise<QuoteRecord[]> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/quotes`, {
+  return requestJson<QuoteRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/quotes`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des devis",
   });
-  return parseJsonResponse<QuoteRecord[]>(response);
 }
 
 export async function createQuote(
@@ -412,7 +745,7 @@ export async function downloadQuotePdf(
     const payload = await response.json().catch(() => null);
     const detail =
       payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
-    throw new Error(detail);
+    throw createHttpApiError(response.status, detail);
   }
   return {
     blob: await response.blob(),
@@ -424,11 +757,13 @@ export async function listInvoices(
   accessToken: string,
   organizationId: string
 ): Promise<InvoiceRecord[]> {
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/invoices`, {
+  return requestJson<InvoiceRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/invoices`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des factures",
   });
-  return parseJsonResponse<InvoiceRecord[]>(response);
 }
 
 export async function createInvoice(
@@ -545,7 +880,7 @@ export async function downloadInvoicePdf(
     const payload = await response.json().catch(() => null);
     const detail =
       payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
-    throw new Error(detail);
+    throw createHttpApiError(response.status, detail);
   }
   return {
     blob: await response.blob(),
@@ -559,11 +894,13 @@ export async function listDuerpEntries(
   siteId?: string | null
 ): Promise<DuerpEntryRecord[]> {
   const suffix = siteId ? `?site_id=${encodeURIComponent(siteId)}` : "";
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/duerp-entries${suffix}`, {
+  return requestJson<DuerpEntryRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/duerp-entries${suffix}`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: REGULATORY_WORKSPACE_TIMEOUT_MS,
+    timeoutLabel: "des entrées DUERP",
   });
-  return parseJsonResponse<DuerpEntryRecord[]>(response);
 }
 
 export async function createDuerpEntry(
@@ -605,11 +942,13 @@ export async function listRegulatoryEvidences(
   siteId?: string | null
 ): Promise<RegulatoryEvidenceRecord[]> {
   const suffix = siteId ? `?site_id=${encodeURIComponent(siteId)}` : "";
-  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/regulatory-evidences${suffix}`, {
+  return requestJson<RegulatoryEvidenceRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/regulatory-evidences${suffix}`, {
     method: "GET",
     headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: REGULATORY_WORKSPACE_TIMEOUT_MS,
+    timeoutLabel: "des pièces réglementaires",
   });
-  return parseJsonResponse<RegulatoryEvidenceRecord[]>(response);
 }
 
 export async function createRegulatoryEvidence(
@@ -640,7 +979,7 @@ export async function downloadRegulatoryExportPdf(
     const payload = await response.json().catch(() => null);
     const detail =
       payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
-    throw new Error(detail);
+    throw createHttpApiError(response.status, detail);
   }
   return {
     blob: await response.blob(),

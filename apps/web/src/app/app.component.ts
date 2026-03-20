@@ -1,6 +1,7 @@
 import { CommonModule } from "@angular/common";
-import { Component, DoCheck } from "@angular/core";
+import { Component, DoCheck, TemplateRef, ViewChild, ViewEncapsulation, forwardRef, inject } from "@angular/core";
 import { FormsModule } from "@angular/forms";
+import { NavigationCancel, NavigationEnd, NavigationError, Router, RouterOutlet } from "@angular/router";
 import type {
   ApplicableRegulatoryObligationRecord,
   AuditLogRecord,
@@ -9,11 +10,14 @@ import type {
   BillingCustomerRecord,
   BillingCustomerType,
   BillingLineItemInput,
+  CockpitSummaryRecord,
+  CockpitTone,
   BuildingSafetyAlertRecord,
   BuildingSafetyItemRecord,
   BuildingSafetyItemStatus,
   BuildingSafetyItemType,
   ComplianceStatus,
+  DocumentLifecycleStatus,
   DuerpEntryRecord,
   DuerpSeverity,
   InvoiceRecord,
@@ -33,6 +37,13 @@ import type {
   QuoteRecord,
   QuoteStatus,
   WorksiteApiSummary,
+  WorksiteAssigneeRecord,
+  WorksiteCoordinationRecord,
+  WorksiteCoordinationStatus,
+  WorksiteDocumentRecord,
+  WorksiteProofRecord,
+  WorksitePreventionPlanExportRequest,
+  WorksiteSignatureRecord,
 } from "@conformeo/contracts";
 import {
   CfmButtonComponent,
@@ -52,6 +63,7 @@ import {
   persistSession,
   updateOrganizationModule
 } from "./auth-client";
+import { ApiClientError } from "./api-error";
 import {
   createBillingCustomer,
   createBuildingSafetyItem,
@@ -61,9 +73,13 @@ import {
   createQuote,
   createRegulatoryEvidence,
   duplicateQuoteToInvoice,
+  downloadGeneratedWorksiteDocument,
   downloadInvoicePdf,
+  downloadWorksitePreventionPlanPdf,
   downloadQuotePdf,
   downloadRegulatoryExportPdf,
+  downloadWorksiteSummaryPdf,
+  fetchCockpitSummary,
   fetchOrganizationProfile,
   fetchOrganizationRegulatoryProfile,
   listAuditLogs,
@@ -75,6 +91,10 @@ import {
   listOrganizationSites,
   listQuotes,
   listRegulatoryEvidences,
+  listWorksiteAssignees,
+  listWorksiteDocuments,
+  listWorksiteProofs,
+  listWorksiteSignatures,
   listWorksites,
   recordInvoicePayment,
   updateBillingCustomer,
@@ -89,8 +109,21 @@ import {
   updateQuote,
   updateQuoteFollowUpStatus,
   updateQuoteStatus,
-  updateQuoteWorksiteLink
+  updateQuoteWorksiteLink,
+  updateWorksiteDocumentProofs,
+  updateWorksiteCoordination,
+  updateWorksiteDocumentCoordination,
+  updateWorksiteDocumentSignature,
+  updateWorksiteDocumentStatus
 } from "./organization-client";
+import {
+  DESKTOP_SHELL_CONTEXT,
+  type DesktopShellContext,
+  type WorkspaceTemplateName,
+} from "./desktop-shell-context";
+import { DESKTOP_LOGIN_PAGE_CONTEXT } from "./desktop-login-page-context";
+import { DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT } from "./desktop-worksite-documents-page-context";
+import { generatedEnv } from "../environments/generated-env";
 
 type HasEmployeesValue = "" | "yes" | "no";
 type BillingLineForm = { description: string; quantity: string; unitPrice: string; };
@@ -114,174 +147,1521 @@ type InvoiceDraftForm = {
   notes: string;
   lines: BillingLineForm[];
 };
+type WorksitePreventionPlanForm = {
+  usefulDate: string;
+  interventionContext: string;
+  vigilancePoints: string;
+  measurePoints: string;
+  additionalContact: string;
+};
+type WorksitePreventionPlanPreview = {
+  companyName: string;
+  worksiteName: string;
+  worksiteAddress: string;
+  clientName: string | null;
+  usefulDateLabel: string | null;
+  interventionContext: string;
+  vigilancePoints: string[];
+  measurePoints: string[];
+  additionalContact: string | null;
+};
+type CoordinationDraftForm = {
+  status: WorksiteCoordinationStatus;
+  assigneeUserId: string;
+  commentText: string;
+};
 type BillingDraftRecord<TPayload> = {
   updatedAt: string;
   payload: TPayload;
+};
+type DashboardKpiCard = {
+  id: string;
+  label: string;
+  value: string;
+  detail: string;
+  statusLabel: string;
+  tone: CfmTone;
+};
+type DashboardAlertItem = {
+  id: string;
+  title: string;
+  description: string;
+  moduleLabel: string;
+  tone: CfmTone;
+  priority: number;
+};
+type DashboardActionModule = "reglementation" | "chantier" | "facturation";
+type DashboardActionModuleFilter = "all" | DashboardActionModule;
+type DashboardActionPriority = "high" | "medium" | "low";
+type CoordinationStatusFilter = "all" | WorksiteCoordinationStatus;
+type CoordinationAssigneeFilter = "all" | "unassigned" | string;
+type WorksiteDocumentLifecycleFilter = "all" | DocumentLifecycleStatus;
+type BetaFeedbackCategory = "blocking" | "unclear" | "improvement" | "positive";
+type BetaFeedbackArea =
+  | "cockpit"
+  | "worksite"
+  | "worksite_document"
+  | "facturation"
+  | "reglementation"
+  | "sync"
+  | "other";
+type DashboardActionItem = {
+  id: string;
+  module: DashboardActionModule;
+  priority: DashboardActionPriority;
+  title: string;
+  description: string;
+  context: string | null;
+};
+type DashboardPerspectiveCard = {
+  id: string;
+  label: string;
+  headline: string;
+  detail: string;
+  highlights: Array<{
+    id: string;
+    label: string;
+    value: string;
+  }>;
+  statusLabel: string;
+  tone: CfmTone;
+};
+type DashboardWorksiteOverviewItem = {
+  id: string;
+  name: string;
+  summary: string;
+  operationalSummary: string;
+  taskSummary: string;
+  coordination: DashboardCoordinationState;
+  worksiteDocuments: DashboardWorksiteDocumentItem[];
+  linkedQuotesSummary: string;
+  linkedInvoicesSummary: string;
+  linkedWorksiteDocumentsSummary: string;
+  worksiteDocumentsCount: number;
+  financialSummary: string | null;
+  regulatorySummary: string | null;
+  statusLabel: string;
+  statusTone: CfmTone;
+  signalLabel: string;
+  signalTone: CfmTone;
+};
+type DashboardCoordinationState = {
+  status: WorksiteCoordinationStatus;
+  statusLabel: string;
+  statusTone: CfmTone;
+  assigneeUserId: string | null;
+  assigneeDisplayName: string | null;
+  assigneeLabel: string;
+  commentText: string | null;
+  commentSummary: string;
+  updatedAtLabel: string | null;
+};
+type DashboardWorksiteDocumentItem = {
+  id: string;
+  title: string;
+  documentType: string;
+  fileName: string;
+  worksiteId: string;
+  worksiteName: string;
+  lifecycleStatus: DocumentLifecycleStatus;
+  lifecycleStatusLabel: string;
+  lifecycleStatusTone: CfmTone;
+  technicalStatusLabel: string;
+  technicalStatusTone: CfmTone;
+  typeLabel: string;
+  proofCount: number;
+  proofCountLabel: string;
+  signatureStatusLabel: string;
+  signatureStatusTone: CfmTone;
+  linkedSignature: DashboardWorksiteLinkedAssetItem | null;
+  linkedSignatureId: string | null;
+  linkedSignatureLabel: string | null;
+  linkedSignatureDetail: string | null;
+  linkedProofs: DashboardWorksiteLinkedAssetItem[];
+  linkedProofsSummary: string | null;
+  hasStoredFile: boolean;
+  fileAvailabilityLabel: string;
+  fileAvailabilityTone: CfmTone;
+  fileSizeLabel: string | null;
+  uploadedAtValue: string | null;
+  uploadedAtLabel: string | null;
+  notes: string | null;
+  coordination: DashboardCoordinationState;
+};
+type DashboardWorksiteLinkedAssetItem = {
+  id: string;
+  label: string;
+  detail: string | null;
+  statusLabel: string;
+  statusTone: CfmTone;
+};
+type DashboardCoordinationTodoItem = {
+  id: string;
+  kind: "worksite" | "document";
+  kindLabel: string;
+  kindTone: CfmTone;
+  title: string;
+  description: string;
+  context: string | null;
+  status: WorksiteCoordinationStatus;
+  statusLabel: string;
+  statusTone: CfmTone;
+  worksiteId: string;
+  documentId: string | null;
+};
+type UserErrorContext = "generic" | "auth" | "load" | "save" | "update" | "export";
+type DashboardCustomerOverviewItem = {
+  id: string;
+  name: string;
+  summary: string;
+  context: string;
+  statusLabel: string;
+  statusTone: CfmTone;
+  signalLabel: string;
+  signalTone: CfmTone;
 };
 
 @Component({
   selector: "cfm-root",
   standalone: true,
+  encapsulation: ViewEncapsulation.None,
   imports: [
     CommonModule,
     FormsModule,
+    RouterOutlet,
     CfmButtonComponent,
     CfmCardComponent,
     CfmEmptyStateComponent,
     CfmInputComponent,
     CfmStatusChipComponent
   ],
+  providers: [
+    {
+      provide: DESKTOP_LOGIN_PAGE_CONTEXT,
+      useExisting: forwardRef(() => AppComponent),
+    },
+    {
+      provide: DESKTOP_SHELL_CONTEXT,
+      useExisting: forwardRef(() => AppComponent),
+    },
+    {
+      provide: DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT,
+      useExisting: forwardRef(() => AppComponent),
+    },
+  ],
   template: `
-    <main class="shell" [class.shell-workspace]="session">
-      <cfm-card
-        *ngIf="!session; else workspaceTemplate"
-        class="desktop-card"
-        eyebrow="Conformeo Desktop"
-        title="Connexion"
-        description="Accédez à l’espace bureau pour initialiser l’entreprise, préparer le périmètre réglementaire et gérer les premiers sites."
-      >
-        <form class="auth-form" (ngSubmit)="submitLogin()">
-          <cfm-input
-            [(ngModel)]="email"
-            name="email"
-            type="email"
-            autocomplete="username"
-            label="Email"
-            placeholder="prenom.nom@entreprise.fr"
-            required
-          />
+    <router-outlet />
 
-          <cfm-input
-            [(ngModel)]="password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            label="Mot de passe"
-            placeholder="Mot de passe"
-            required
-          />
-
-          <cfm-button type="submit" [disabled]="loading" [block]="true">
-            {{ loading ? "Connexion..." : "Se connecter" }}
-          </cfm-button>
-        </form>
-
-        <p class="feedback error" *ngIf="errorMessage">{{ errorMessage }}</p>
-      </cfm-card>
-
-      <ng-template #workspaceTemplate>
-        <section class="workspace">
-          <cfm-card
-            class="desktop-card"
-            eyebrow="Conformeo Desktop"
-            title="Administration et fondation Réglementation"
-            description="Un socle bureau progressif : contexte multi-organisation, activation des modules et premières informations utiles au périmètre réglementaire."
-          >
-            <div class="session-header" *ngIf="currentMembership as membership">
-              <div>
-                <p class="meta">Connecté en tant que {{ session?.user?.display_name }}</p>
-                <h2>{{ membership.organization.name }}</h2>
-                <p class="small">
-                  Rôle actuel : <strong>{{ membership.membership.role_code }}</strong>
-                </p>
-              </div>
-
-              <div class="session-actions">
-                <label class="organization-switch" *ngIf="session && session.memberships.length > 1">
-                  <span>Organisation</span>
-                  <select [(ngModel)]="selectedOrganizationId" name="organizationId" (change)="changeOrganization()">
-                    <option *ngFor="let item of session.memberships" [value]="item.organization.id">
-                      {{ item.organization.name }}
-                    </option>
-                  </select>
-                </label>
-
-                <cfm-button type="button" variant="secondary" (click)="logout()">
-                  Se déconnecter
-                </cfm-button>
-              </div>
-            </div>
-
-            <div class="grid" *ngIf="currentMembership as membership">
-              <article>
-                <h3>Permissions</h3>
-                <div class="chips">
-                  <cfm-status-chip
-                    *ngFor="let permission of membership.permissions"
-                    [label]="permission"
-                    tone="calm"
-                  />
+    <ng-template #homePageTemplate>
+            <cfm-card
+              *ngIf="shouldShowInitialWorkspaceLoading"
+              class="desktop-card"
+              eyebrow="Cockpit"
+              title="Chargement du cockpit"
+              description="Les repères entreprise, chantier et facturation sont en train d’être préparés."
+            >
+              <div class="loading-state-card" aria-hidden="true">
+                <div class="loading-state-hero"></div>
+                <div class="loading-state-grid">
+                  <span></span>
+                  <span></span>
+                  <span></span>
                 </div>
-              </article>
+                <div class="loading-state-lines">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+            </cfm-card>
 
-              <article>
-                <h3>Organisations liées</h3>
-                <ul class="stack-list">
-                  <li *ngFor="let item of session?.memberships">
-                    <div class="list-copy">
-                      <strong>{{ item.organization.name }}</strong>
-                      <span>{{ item.membership.role_code }}</span>
+            <ng-template #homeAdministrationCardTemplate>
+              <cfm-card
+                class="desktop-card"
+                eyebrow="Organisation"
+                title="Organisation et modules"
+                description="Les réglages d’organisation et les modules activés restent accessibles, sans prendre la place du cockpit."
+              >
+                <div class="grid" *ngIf="currentMembership as membership">
+                  <article>
+                    <h3>Permissions</h3>
+                    <div class="chips">
+                      <cfm-status-chip
+                        *ngFor="let permission of membership.permissions"
+                        [label]="permission"
+                        tone="calm"
+                      />
                     </div>
-                    <cfm-status-chip
-                      [label]="item.membership.is_default ? 'Courante' : 'Liée'"
-                      [tone]="item.membership.is_default ? 'success' : 'neutral'"
-                    />
-                  </li>
-                </ul>
-              </article>
-            </div>
+                  </article>
 
-            <section class="modules" *ngIf="currentMembership as membership">
-              <div class="modules-header">
-                <div>
-                  <h3>Modules de l'organisation</h3>
-                  <p>
-                    Activez les modules utiles pour ouvrir progressivement la réglementation et la facturation depuis l’espace bureau.
-                  </p>
+                  <article>
+                    <h3>Organisations liées</h3>
+                    <ul class="stack-list">
+                      <li *ngFor="let item of session?.memberships">
+                        <div class="list-copy">
+                          <strong>{{ item.organization.name }}</strong>
+                          <span>{{ item.membership.role_code }}</span>
+                        </div>
+                        <cfm-status-chip
+                          [label]="item.membership.is_default ? 'Courante' : 'Liée'"
+                          [tone]="item.membership.is_default ? 'success' : 'neutral'"
+                        />
+                      </li>
+                    </ul>
+                  </article>
                 </div>
-              </div>
 
-              <ul class="module-list" *ngIf="membership.modules.length > 0; else emptyModules">
-                <li *ngFor="let module of membership.modules">
-                  <div class="module-copy">
-                    <strong>{{ module.module_code }}</strong>
-                    <cfm-status-chip
-                      [label]="module.is_enabled ? 'Activé' : 'Désactivé'"
-                      [tone]="module.is_enabled ? 'success' : 'neutral'"
-                    />
+                <section class="modules" *ngIf="currentMembership as membership">
+                  <div class="modules-header">
+                    <div>
+                      <h3>Modules de l'organisation</h3>
+                      <p>
+                        Activez les modules utiles pour ouvrir progressivement la réglementation et la facturation depuis l’espace bureau.
+                      </p>
+                    </div>
                   </div>
 
-                  <label class="toggle">
-                    <input
-                      type="checkbox"
-                      [checked]="module.is_enabled"
-                      [disabled]="loading || !canManageModules"
-                      (change)="toggleModule(module.module_code, $any($event.target).checked)"
+                  <ul class="module-list" *ngIf="membership.modules.length > 0; else emptyModules">
+                    <li *ngFor="let module of membership.modules">
+                      <div class="module-copy">
+                        <strong>{{ module.module_code }}</strong>
+                        <cfm-status-chip
+                          [label]="module.is_enabled ? 'Activé' : 'Désactivé'"
+                          [tone]="module.is_enabled ? 'success' : 'neutral'"
+                        />
+                      </div>
+
+                      <label class="toggle">
+                        <input
+                          type="checkbox"
+                          [checked]="module.is_enabled"
+                          [disabled]="loading || !canManageModules"
+                          (change)="toggleModule(module.module_code, $any($event.target).checked)"
+                        />
+                        <span>{{ module.is_enabled ? "On" : "Off" }}</span>
+                      </label>
+                    </li>
+                  </ul>
+
+                  <ng-template #emptyModules>
+                    <cfm-empty-state
+                      title="Aucun module configuré"
+                      description="Cette organisation n’a encore aucun module activable dans le socle actuel."
                     />
-                    <span>{{ module.is_enabled ? "On" : "Off" }}</span>
-                  </label>
+                  </ng-template>
+                </section>
+              </cfm-card>
+            </ng-template>
+
+          <cfm-card
+            *ngIf="currentMembership"
+            class="desktop-card"
+            eyebrow="S4-001 · S4-002 · S4-003"
+            title="Vue d’ensemble"
+            description="Quelques repères utiles pour savoir quoi traiter aujourd’hui, sans reporting complexe ni jargon métier."
+          >
+            <div class="card-header-actions">
+              <div class="chips">
+                <cfm-status-chip
+                  [label]="dashboardKpis.length + ' repère' + (dashboardKpis.length > 1 ? 's' : '')"
+                  [tone]="dashboardKpis.length > 0 ? 'calm' : 'neutral'"
+                />
+                <cfm-status-chip
+                  [label]="dashboardActions.length > 0 ? dashboardActions.length + ' action' + (dashboardActions.length > 1 ? 's' : '') : 'Aucune action simple'"
+                  [tone]="dashboardActions.length > 0 ? 'progress' : 'success'"
+                />
+                <cfm-status-chip
+                  [label]="dashboardAlerts.length > 0 ? dashboardAlerts.length + ' priorité' + (dashboardAlerts.length > 1 ? 's' : '') : 'Aucune alerte simple'"
+                  [tone]="dashboardAlerts.length > 0 ? 'progress' : 'success'"
+                />
+              </div>
+            </div>
+
+            <div class="dashboard-grid" *ngIf="dashboardKpis.length > 0; else emptyDashboard">
+              <article class="dashboard-kpi-card" *ngFor="let kpi of dashboardKpis">
+                <p class="meta">{{ kpi.label }}</p>
+                <strong class="dashboard-kpi-value">{{ kpi.value }}</strong>
+                <span>{{ kpi.detail }}</span>
+                <cfm-status-chip [label]="kpi.statusLabel" [tone]="kpi.tone" />
+              </article>
+            </div>
+
+            <ng-template #emptyDashboard>
+              <cfm-empty-state
+                title="Aucun module actif pour le moment"
+                description="Activez Réglementation, Chantier ou Facturation pour faire apparaître une vue d’ensemble utile."
+              />
+            </ng-template>
+
+            <section class="dashboard-alerts">
+              <h3>Priorités du moment</h3>
+
+              <ul class="alert-list" *ngIf="dashboardAlerts.length > 0; else emptyDashboardAlerts">
+                <li *ngFor="let alert of dashboardAlerts">
+                  <div class="dashboard-alert-copy">
+                    <strong>{{ alert.title }}</strong>
+                    <span>{{ alert.description }}</span>
+                  </div>
+                  <cfm-status-chip [label]="alert.moduleLabel" [tone]="alert.tone" />
                 </li>
               </ul>
 
-              <ng-template #emptyModules>
-                <cfm-empty-state
-                  title="Aucun module configuré"
-                  description="Cette organisation n’a encore aucun module activable dans le socle actuel."
+              <ng-template #emptyDashboardAlerts>
+                <p class="small">Aucune priorité simple détectée pour le moment.</p>
+              </ng-template>
+            </section>
+
+            <section class="dashboard-actions">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>Actions à faire</h3>
+                  <p class="small">
+                    Une vue courte pour passer du constat à l’action, sans créer un gestionnaire de tâches.
+                  </p>
+                </div>
+
+                <label class="field compact-field dashboard-filter">
+                  <span>Module</span>
+                  <select [(ngModel)]="selectedDashboardActionModule" name="selectedDashboardActionModule">
+                    <option value="all">Tous les modules</option>
+                    <option value="reglementation">Réglementation</option>
+                    <option value="chantier">Chantier</option>
+                    <option value="facturation">Facturation</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="chips">
+                <cfm-status-chip
+                  [label]="dashboardActionCountLabel"
+                  [tone]="filteredDashboardActions.length > 0 ? 'progress' : 'success'"
                 />
+              </div>
+
+              <ul class="alert-list" *ngIf="filteredDashboardActions.length > 0; else emptyDashboardActions">
+                <li *ngFor="let action of filteredDashboardActions">
+                  <div class="dashboard-alert-copy">
+                    <strong>{{ action.title }}</strong>
+                    <span>{{ action.description }}</span>
+                    <span *ngIf="action.context">{{ action.context }}</span>
+                  </div>
+
+                  <div class="chips">
+                    <cfm-status-chip
+                      [label]="getDashboardActionPriorityLabel(action.priority)"
+                      [tone]="getDashboardActionPriorityTone(action.priority)"
+                    />
+                    <cfm-status-chip
+                      [label]="getDashboardActionModuleLabel(action.module)"
+                      [tone]="getDashboardActionModuleTone(action.module)"
+                    />
+                  </div>
+                </li>
+              </ul>
+
+              <ng-template #emptyDashboardActions>
+                <p class="small">
+                  {{
+                    selectedDashboardActionModule === "all"
+                      ? "Aucune action simple détectée pour le moment."
+                      : "Aucune action simple pour ce module."
+                  }}
+                </p>
               </ng-template>
             </section>
           </cfm-card>
 
           <cfm-card
-            *ngIf="organizationWorkspaceLoading"
+            *ngIf="currentMembership"
+            class="desktop-card"
+            eyebrow="S4-020 · S4-021 · S4-022"
+            title="Lectures utiles"
+            description="Trois angles simples pour relire l’activité sans ouvrir de vue analytique complexe : entreprise, chantier et client."
+          >
+            <section class="dashboard-actions">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>Synthèse par module</h3>
+                  <p class="small">
+                    Chaque module ressort avec quelques repères utiles pour comprendre plus vite où regarder.
+                  </p>
+                </div>
+              </div>
+
+              <div class="dashboard-grid" *ngIf="dashboardEnterpriseOverviewCards.length > 0; else emptyEnterpriseOverview">
+                <article class="dashboard-kpi-card" *ngFor="let card of dashboardEnterpriseOverviewCards">
+                  <p class="meta">{{ card.label }}</p>
+                  <strong>{{ card.headline }}</strong>
+                  <span>{{ card.detail }}</span>
+                  <ul class="dashboard-module-highlights" *ngIf="card.highlights.length > 0">
+                    <li *ngFor="let highlight of card.highlights">
+                      <span class="meta">{{ highlight.label }}</span>
+                      <strong>{{ highlight.value }}</strong>
+                    </li>
+                  </ul>
+                  <cfm-status-chip [label]="card.statusLabel" [tone]="card.tone" />
+                </article>
+              </div>
+
+              <ng-template #emptyEnterpriseOverview>
+                <p class="small">Aucun module actif pour construire une lecture synthétique pour le moment.</p>
+              </ng-template>
+            </section>
+
+            <section class="dashboard-actions">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>À traiter</h3>
+                  <p class="small">
+                    Une lecture courte pour retrouver vite les chantiers et documents encore en préparation.
+                  </p>
+                </div>
+
+                <cfm-status-chip
+                  [label]="coordinationTodoCountLabel"
+                  [tone]="coordinationTodoItems.length > 0 ? 'progress' : 'success'"
+                />
+              </div>
+
+              <ng-container *ngIf="isChantierEnabled; else chantierCoordinationDisabled">
+                <div class="inline-actions">
+                  <label class="compact-field">
+                    <span class="small">Suivi</span>
+                    <select [(ngModel)]="selectedCoordinationStatusFilter" name="selectedCoordinationStatusFilter">
+                      <option value="all">Tous les suivis</option>
+                      <option value="todo">À faire</option>
+                      <option value="in_progress">En cours</option>
+                      <option value="done">Fait</option>
+                    </select>
+                  </label>
+
+                  <label class="compact-field">
+                    <span class="small">Affectation</span>
+                    <select [(ngModel)]="selectedCoordinationAssigneeFilter" name="selectedCoordinationAssigneeFilter">
+                      <option value="all">Toutes les affectations</option>
+                      <option value="unassigned">Non affecté</option>
+                      <option *ngFor="let assignee of worksiteAssignees" [value]="assignee.user_id">
+                        {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <cfm-button
+                    *ngIf="hasActiveCoordinationFilters"
+                    type="button"
+                    variant="secondary"
+                    (click)="resetCoordinationFilters()"
+                  >
+                    Réinitialiser les filtres
+                  </cfm-button>
+                </div>
+
+                <p class="small">
+                  Ces filtres s'appliquent aussi à la vue chantier et aux documents chantier plus bas.
+                </p>
+
+                <ul class="alert-list" *ngIf="coordinationTodoItems.length > 0; else emptyCoordinationTodo">
+                  <li *ngFor="let item of coordinationTodoItems">
+                    <div class="dashboard-alert-copy">
+                      <strong>{{ item.title }}</strong>
+                      <span>{{ item.description }}</span>
+                      <span *ngIf="item.context">{{ item.context }}</span>
+                    </div>
+
+                    <div class="billing-item-actions">
+                      <div class="chips">
+                        <cfm-status-chip [label]="item.kindLabel" [tone]="item.kindTone" />
+                        <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
+                      </div>
+
+                      <cfm-button
+                        type="button"
+                        variant="secondary"
+                        (click)="openCoordinationTodoItem(item)"
+                      >
+                        {{ item.kind === "worksite" ? "Voir le chantier" : "Voir le document" }}
+                      </cfm-button>
+                    </div>
+                  </li>
+                </ul>
+
+                <ng-template #emptyCoordinationTodo>
+                  <p class="small">
+                    {{
+                      hasActiveCoordinationFilters
+                        ? "Aucun élément coordonné ne correspond aux filtres."
+                        : "Aucun chantier ni document coordonné à traiter pour le moment."
+                    }}
+                  </p>
+                </ng-template>
+              </ng-container>
+
+              <ng-template #chantierCoordinationDisabled>
+                <p class="small">Activez le module Chantier pour faire apparaître cette lecture.</p>
+              </ng-template>
+            </section>
+
+            <section class="dashboard-actions" id="worksite-overview-section">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>Vue par chantier</h3>
+                  <p class="small">
+                    Les chantiers ressortent avec leur statut général, leurs signaux simples et les documents déjà liés.
+                  </p>
+                </div>
+
+                <cfm-status-chip
+                  [label]="worksiteOverviewCountLabel"
+                  [tone]="filteredDashboardWorksiteOverviewItems.length > 0 ? 'calm' : 'neutral'"
+                />
+              </div>
+
+              <ng-container *ngIf="isChantierEnabled; else chantierOverviewDisabled">
+                <ul class="alert-list" *ngIf="filteredDashboardWorksiteOverviewItems.length > 0; else emptyWorksiteOverview">
+                  <li *ngFor="let item of filteredDashboardWorksiteOverviewItems">
+                    <div class="dashboard-alert-copy">
+                      <strong>{{ item.name }}</strong>
+                      <span>{{ item.summary }}</span>
+                      <span>{{ item.operationalSummary }}</span>
+                      <span>{{ item.taskSummary }}</span>
+                      <span>
+                        Coordination : {{ item.coordination.statusLabel }} · {{ item.coordination.assigneeLabel }}
+                      </span>
+                      <span *ngIf="item.coordination.commentText">{{ item.coordination.commentSummary }}</span>
+                      <span *ngIf="item.coordination.updatedAtLabel">
+                        Dernier suivi : {{ item.coordination.updatedAtLabel }}
+                      </span>
+                      <span>{{ item.linkedWorksiteDocumentsSummary }}</span>
+                      <span>{{ item.linkedQuotesSummary }}</span>
+                      <span>{{ item.linkedInvoicesSummary }}</span>
+                      <span *ngIf="item.financialSummary">{{ item.financialSummary }}</span>
+                      <span *ngIf="item.regulatorySummary">{{ item.regulatorySummary }}</span>
+                    </div>
+
+                    <div class="billing-item-actions">
+                      <div class="chips">
+                        <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
+                        <cfm-status-chip [label]="item.signalLabel" [tone]="item.signalTone" />
+                      </div>
+
+                      <cfm-button
+                        *ngIf="canManageOrganization && isFacturationEnabled && billingCustomers.length > 0"
+                        type="button"
+                        variant="secondary"
+                        (click)="prepareQuoteFromWorksite(item.id)"
+                      >
+                        Préparer un devis
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canManageOrganization && isFacturationEnabled && billingCustomers.length > 0"
+                        type="button"
+                        variant="secondary"
+                        (click)="prepareInvoiceFromWorksite(item.id)"
+                      >
+                        Préparer une facture
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canReadOrganization"
+                        type="button"
+                        variant="secondary"
+                        [disabled]="worksiteDocumentPdfBusyId === item.id"
+                        (click)="exportWorksiteSummaryPdf(item.id)"
+                      >
+                        {{ worksiteDocumentPdfBusyId === item.id ? "Génération..." : "Fiche chantier PDF" }}
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canReadOrganization"
+                        type="button"
+                        variant="secondary"
+                        [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                        (click)="toggleWorksitePreventionPlanEditor(item.id)"
+                      >
+                        {{
+                          worksitePreventionPlanEditingId === item.id
+                            ? "Fermer le plan"
+                            : "Ajuster le plan"
+                        }}
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="item.worksiteDocumentsCount > 0"
+                        type="button"
+                        variant="secondary"
+                        (click)="focusWorksiteDocuments(item.id)"
+                      >
+                        Voir les documents
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canReadOrganization"
+                        type="button"
+                        variant="secondary"
+                        (click)="toggleWorksiteCoordination(item.id)"
+                      >
+                        {{
+                          selectedWorksiteCoordinationId === item.id
+                            ? "Masquer la coordination"
+                            : "Coordination simple"
+                        }}
+                      </cfm-button>
+                    </div>
+
+                    <ul class="stack-list" *ngIf="item.worksiteDocuments.length > 0">
+                      <li *ngFor="let document of item.worksiteDocuments">
+                        <div class="list-copy">
+                          <strong>{{ document.title }}</strong>
+                          <span>{{ document.fileName }}</span>
+                          <span *ngIf="document.uploadedAtLabel">
+                            Dernière génération : {{ document.uploadedAtLabel }}
+                          </span>
+                          <span *ngIf="document.linkedSignatureLabel">
+                            Signature liée : {{ document.linkedSignatureLabel }}
+                            <ng-container *ngIf="document.linkedSignatureDetail">
+                              · {{ document.linkedSignatureDetail }}
+                            </ng-container>
+                          </span>
+                          <span *ngIf="document.linkedProofsSummary">
+                            Preuves liées : {{ document.linkedProofsSummary }}
+                          </span>
+                          <span>
+                            Coordination : {{ document.coordination.statusLabel }} ·
+                            {{ document.coordination.assigneeLabel }}
+                          </span>
+                          <span *ngIf="document.coordination.commentText">
+                            {{ document.coordination.commentSummary }}
+                          </span>
+                        </div>
+
+                        <div class="billing-item-actions">
+                          <div class="chips">
+                            <cfm-status-chip
+                              [label]="document.lifecycleStatusLabel"
+                              [tone]="document.lifecycleStatusTone"
+                            />
+                          </div>
+
+                          <label class="compact-field" *ngIf="canManageOrganization">
+                            <span class="small">Statut du document</span>
+                            <select
+                              [ngModel]="document.lifecycleStatus"
+                              [name]="'worksiteDocumentLifecycle' + document.id"
+                              [disabled]="worksiteDocumentStatusBusyId === document.id"
+                              (ngModelChange)="changeWorksiteDocumentLifecycleStatus(document.id, $event)"
+                            >
+                              <option value="draft">Brouillon</option>
+                              <option value="finalized">Finalisé</option>
+                            </select>
+                          </label>
+
+                          <label
+                            class="compact-field"
+                            *ngIf="canManageOrganization && getWorksiteSignatureOptions(document.worksiteId).length > 0"
+                          >
+                            <span class="small">Signature liée</span>
+                            <select
+                              [ngModel]="document.linkedSignatureId ?? ''"
+                              [name]="'worksiteDocumentSignature' + document.id"
+                              [disabled]="worksiteDocumentSignatureBusyId === document.id"
+                              (ngModelChange)="changeWorksiteDocumentSignature(document.id, $event)"
+                            >
+                              <option value="">Aucune signature liée</option>
+                              <option
+                                *ngFor="let signature of getWorksiteSignatureOptions(document.worksiteId)"
+                                [value]="signature.id"
+                              >
+                                {{ getWorksiteSignatureOptionLabel(signature) }}
+                              </option>
+                            </select>
+                          </label>
+
+                          <span
+                            class="small"
+                            *ngIf="canManageOrganization && getWorksiteSignatureOptions(document.worksiteId).length === 0"
+                          >
+                            Aucune signature chantier disponible pour ce chantier.
+                          </span>
+
+                          <div
+                            class="inline-choice-list compact-field"
+                            *ngIf="canManageOrganization && getWorksiteProofOptions(document.worksiteId).length > 0"
+                          >
+                            <span class="small">Preuves liées</span>
+                            <label
+                              class="inline-choice"
+                              *ngFor="let proof of getWorksiteProofOptions(document.worksiteId)"
+                            >
+                              <input
+                                type="checkbox"
+                                [ngModel]="isWorksiteProofLinked(document, proof.id)"
+                                [ngModelOptions]="{ standalone: true }"
+                                [disabled]="worksiteDocumentProofBusyId === document.id"
+                                (ngModelChange)="toggleWorksiteDocumentProof(document.id, proof.id, $event)"
+                              />
+                              <span>{{ getWorksiteProofOptionLabel(proof) }}</span>
+                            </label>
+                          </div>
+
+                          <span
+                            class="small"
+                            *ngIf="canManageOrganization && getWorksiteProofOptions(document.worksiteId).length === 0"
+                          >
+                            Aucune preuve chantier disponible pour ce chantier.
+                          </span>
+                        </div>
+                      </li>
+                    </ul>
+
+                    <section class="document-linked-panel" *ngIf="selectedWorksiteCoordinationId === item.id">
+                      <div class="detail-grid">
+                        <div class="detail-block">
+                          <span class="small">Suivi</span>
+                          <strong>{{ item.coordination.statusLabel }}</strong>
+                          <cfm-status-chip
+                            [label]="item.coordination.statusLabel"
+                            [tone]="item.coordination.statusTone"
+                          />
+                        </div>
+
+                        <div class="detail-block">
+                          <span class="small">Affectation</span>
+                          <strong>{{ item.coordination.assigneeLabel }}</strong>
+                          <span *ngIf="item.coordination.updatedAtLabel">
+                            Dernière mise à jour : {{ item.coordination.updatedAtLabel }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="detail-block">
+                        <span class="small">Commentaire simple</span>
+                        <span>
+                          {{ item.coordination.commentText || "Aucun commentaire simple pour le moment." }}
+                        </span>
+                      </div>
+
+                      <div class="detail-grid" *ngIf="canManageOrganization">
+                        <label class="field compact-field">
+                          <span>Suivi</span>
+                          <select
+                            [ngModel]="getWorksiteCoordinationDraft(item.id).status"
+                            [name]="'worksiteCoordinationStatus' + item.id"
+                            [disabled]="worksiteCoordinationBusyId === item.id"
+                            (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { status: $event })"
+                          >
+                            <option value="todo">À faire</option>
+                            <option value="in_progress">En cours</option>
+                            <option value="done">Fait</option>
+                          </select>
+                        </label>
+
+                        <label
+                          class="field compact-field"
+                          *ngIf="worksiteAssignees.length > 0; else noWorksiteAssignees"
+                        >
+                          <span>Affectation</span>
+                          <select
+                            [ngModel]="getWorksiteCoordinationDraft(item.id).assigneeUserId"
+                            [name]="'worksiteCoordinationAssignee' + item.id"
+                            [disabled]="worksiteCoordinationBusyId === item.id"
+                            (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { assigneeUserId: $event })"
+                          >
+                            <option value="">Non affecté</option>
+                            <option
+                              *ngFor="let assignee of worksiteAssignees"
+                              [value]="assignee.user_id"
+                            >
+                              {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                            </option>
+                          </select>
+                        </label>
+
+                        <ng-template #noWorksiteAssignees>
+                          <div class="detail-block">
+                            <span class="small">Affectation</span>
+                            <span>Aucun membre lisible pour affecter ce chantier.</span>
+                          </div>
+                        </ng-template>
+                      </div>
+
+                      <label class="field field-wide" *ngIf="canManageOrganization">
+                        <span>Commentaire simple</span>
+                        <textarea
+                          [ngModel]="getWorksiteCoordinationDraft(item.id).commentText"
+                          [name]="'worksiteCoordinationComment' + item.id"
+                          rows="3"
+                          placeholder="Ex. appeler le client avant l'intervention"
+                          [disabled]="worksiteCoordinationBusyId === item.id"
+                          (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { commentText: $event })"
+                        ></textarea>
+                      </label>
+
+                      <div class="inline-actions" *ngIf="canManageOrganization">
+                        <cfm-button
+                          type="button"
+                          [disabled]="worksiteCoordinationBusyId === item.id"
+                          (click)="saveWorksiteCoordination(item)"
+                        >
+                          {{
+                            worksiteCoordinationBusyId === item.id
+                              ? "Enregistrement..."
+                              : "Enregistrer"
+                          }}
+                        </cfm-button>
+                      </div>
+                    </section>
+
+                    <form
+                      class="document-adjustment-form"
+                      *ngIf="worksitePreventionPlanEditingId === item.id"
+                      (ngSubmit)="exportAdjustedWorksitePreventionPlanPdf(item.id)"
+                    >
+                      <p class="small field-wide">
+                        Ajustez seulement ce qui est utile avant export. Le document reste prérempli et ne crée pas
+                        de workflow supplémentaire.
+                      </p>
+
+                      <cfm-input
+                        [(ngModel)]="worksitePreventionPlanForm.usefulDate"
+                        [name]="'worksitePreventionDate' + item.id"
+                        type="datetime-local"
+                        label="Date utile"
+                        [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                      />
+
+                      <cfm-input
+                        [(ngModel)]="worksitePreventionPlanForm.additionalContact"
+                        [name]="'worksitePreventionContact' + item.id"
+                        type="text"
+                        label="Contact utile complémentaire"
+                        placeholder="Ex. chef de site, standard, accueil"
+                        [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                      />
+
+                      <label class="field field-wide">
+                        <span>Contexte d’intervention</span>
+                        <textarea
+                          [(ngModel)]="worksitePreventionPlanForm.interventionContext"
+                          [name]="'worksitePreventionContext' + item.id"
+                          rows="4"
+                          placeholder="Contexte simple de l’intervention"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                        ></textarea>
+                      </label>
+
+                      <label class="field field-wide">
+                        <span>Points de vigilance</span>
+                        <textarea
+                          [(ngModel)]="worksitePreventionPlanForm.vigilancePoints"
+                          [name]="'worksitePreventionVigilance' + item.id"
+                          rows="5"
+                          placeholder="Un point par ligne"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                        ></textarea>
+                      </label>
+
+                      <label class="field field-wide">
+                        <span>Mesures / consignes</span>
+                        <textarea
+                          [(ngModel)]="worksitePreventionPlanForm.measurePoints"
+                          [name]="'worksitePreventionMeasures' + item.id"
+                          rows="5"
+                          placeholder="Une consigne par ligne"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                        ></textarea>
+                      </label>
+
+                      <section class="document-preview field-wide" *ngIf="activeWorksitePreventionPlanPreview as preview">
+                        <div class="document-preview-header">
+                          <strong>Aperçu texte avant téléchargement</strong>
+                          <p class="small">Relisez ici les éléments essentiels repris dans le PDF final.</p>
+                        </div>
+
+                        <div class="detail-grid">
+                          <div class="detail-block">
+                            <span class="small">Entreprise</span>
+                            <strong>{{ preview.companyName }}</strong>
+                          </div>
+
+                          <div class="detail-block">
+                            <span class="small">Date utile</span>
+                            <strong>{{ preview.usefulDateLabel || "À préciser avant export" }}</strong>
+                          </div>
+
+                          <div class="detail-block">
+                            <span class="small">Chantier</span>
+                            <strong>{{ preview.worksiteName }}</strong>
+                            <span>{{ preview.worksiteAddress }}</span>
+                          </div>
+
+                          <div class="detail-block">
+                            <span class="small">Client / donneur d'ordre</span>
+                            <strong>{{ preview.clientName || "À confirmer" }}</strong>
+                            <span *ngIf="preview.additionalContact">
+                              Contact utile complémentaire : {{ preview.additionalContact }}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div class="detail-block">
+                          <span class="small">Contexte d’intervention</span>
+                          <span>{{ preview.interventionContext }}</span>
+                        </div>
+
+                        <div class="detail-grid">
+                          <div class="detail-block">
+                            <span class="small">Points de vigilance</span>
+                            <ul class="detail-list" *ngIf="preview.vigilancePoints.length > 0; else noVigilancePreview">
+                              <li *ngFor="let point of preview.vigilancePoints">{{ point }}</li>
+                            </ul>
+                            <ng-template #noVigilancePreview>
+                              <span>Aucun point de vigilance saisi.</span>
+                            </ng-template>
+                          </div>
+
+                          <div class="detail-block">
+                            <span class="small">Mesures / consignes</span>
+                            <ul class="detail-list" *ngIf="preview.measurePoints.length > 0; else noMeasuresPreview">
+                              <li *ngFor="let point of preview.measurePoints">{{ point }}</li>
+                            </ul>
+                            <ng-template #noMeasuresPreview>
+                              <span>Aucune mesure saisie.</span>
+                            </ng-template>
+                          </div>
+                        </div>
+                      </section>
+
+                      <div class="form-actions inline-actions field-wide">
+                        <cfm-button
+                          type="button"
+                          variant="secondary"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id || !canResetWorksitePreventionPlanToInitial"
+                          (click)="restoreInitialWorksitePreventionPlanForm()"
+                        >
+                          Revenir au préremplissage initial
+                        </cfm-button>
+
+                        <cfm-button
+                          type="submit"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                        >
+                          {{
+                            worksitePreventionPlanPdfBusyId === item.id
+                              ? "Génération..."
+                              : "Exporter le PDF"
+                          }}
+                        </cfm-button>
+
+                        <cfm-button
+                          type="button"
+                          variant="secondary"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                          (click)="cancelWorksitePreventionPlanEditing()"
+                        >
+                          Annuler
+                        </cfm-button>
+                      </div>
+                    </form>
+                  </li>
+                </ul>
+
+                <ng-template #emptyWorksiteOverview>
+                  <p class="small">
+                    {{
+                      hasActiveCoordinationFilters
+                        ? "Aucun chantier ne correspond aux filtres de coordination."
+                        : "Aucun chantier à afficher pour le moment."
+                    }}
+                  </p>
+                </ng-template>
+              </ng-container>
+
+              <ng-template #chantierOverviewDisabled>
+                <p class="small">Activez le module Chantier pour faire apparaître cette lecture.</p>
+              </ng-template>
+            </section>
+
+            <section class="dashboard-actions" id="worksite-documents-section">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>Documents chantier</h3>
+                  <p class="small">
+                    Retrouvez rapidement les documents déjà générés pour un chantier, sans navigation documentaire
+                    plus lourde.
+                  </p>
+                </div>
+
+                <cfm-status-chip
+                  [label]="worksiteDocumentCountLabel"
+                  [tone]="filteredWorksiteDocumentItems.length > 0 ? 'calm' : 'neutral'"
+                />
+              </div>
+
+              <ng-container *ngIf="isChantierEnabled; else chantierDocumentsDisabled">
+                <div class="inline-actions">
+                  <label class="compact-field" *ngIf="worksiteDocumentFilterOptions.length > 1">
+                    <span class="small">Chantier</span>
+                    <select [(ngModel)]="selectedWorksiteDocumentFilterId" name="worksiteDocumentFilterId">
+                      <option value="all">Tous les chantiers</option>
+                      <option *ngFor="let worksite of worksiteDocumentFilterOptions" [value]="worksite.id">
+                        {{ worksite.name }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label class="compact-field" *ngIf="worksiteDocumentTypeFilterOptions.length > 1">
+                    <span class="small">Type</span>
+                    <select [(ngModel)]="selectedWorksiteDocumentTypeFilter" name="worksiteDocumentTypeFilter">
+                      <option value="all">Tous les types</option>
+                      <option *ngFor="let option of worksiteDocumentTypeFilterOptions" [value]="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <label class="compact-field">
+                    <span class="small">Statut</span>
+                    <select
+                      [(ngModel)]="selectedWorksiteDocumentLifecycleFilter"
+                      name="worksiteDocumentLifecycleFilter"
+                    >
+                      <option value="all">Tous les statuts</option>
+                      <option value="draft">Brouillon</option>
+                      <option value="finalized">Finalisé</option>
+                    </select>
+                  </label>
+
+                  <label class="compact-field">
+                    <span class="small">Suivi</span>
+                    <select [(ngModel)]="selectedCoordinationStatusFilter" name="selectedCoordinationStatusFilterDocuments">
+                      <option value="all">Tous les suivis</option>
+                      <option value="todo">À faire</option>
+                      <option value="in_progress">En cours</option>
+                      <option value="done">Fait</option>
+                    </select>
+                  </label>
+
+                  <label class="compact-field">
+                    <span class="small">Affectation</span>
+                    <select [(ngModel)]="selectedCoordinationAssigneeFilter" name="selectedCoordinationAssigneeFilterDocuments">
+                      <option value="all">Toutes les affectations</option>
+                      <option value="unassigned">Non affecté</option>
+                      <option *ngFor="let assignee of worksiteAssignees" [value]="assignee.user_id">
+                        {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <cfm-button
+                    *ngIf="hasActiveWorksiteDocumentFilters"
+                    type="button"
+                    variant="secondary"
+                    (click)="resetWorksiteDocumentFilters()"
+                  >
+                    Réinitialiser les filtres
+                  </cfm-button>
+                </div>
+
+                <ul class="stack-list" *ngIf="filteredWorksiteDocumentItems.length > 0; else emptyWorksiteDocuments">
+                  <li *ngFor="let document of filteredWorksiteDocumentItems">
+                    <div class="list-copy">
+                      <strong>{{ document.title }}</strong>
+                      <span>{{ document.worksiteName }} · {{ document.fileName }}</span>
+                      <span>
+                        Type : {{ document.typeLabel }} · Préparation : {{ document.lifecycleStatusLabel }} ·
+                        {{ document.signatureStatusLabel }} · {{ document.proofCountLabel }}
+                      </span>
+                      <span>
+                        Fichier : {{ document.fileAvailabilityLabel }}
+                        <ng-container *ngIf="document.fileSizeLabel">
+                          · {{ document.fileSizeLabel }}
+                        </ng-container>
+                      </span>
+                      <span>
+                        Coordination : {{ document.coordination.statusLabel }} ·
+                        {{ document.coordination.assigneeLabel }}
+                      </span>
+                      <span *ngIf="document.coordination.commentText">{{ document.coordination.commentSummary }}</span>
+                      <span *ngIf="document.uploadedAtLabel">
+                        Dernière génération : {{ document.uploadedAtLabel }}
+                      </span>
+                      <span *ngIf="document.linkedSignatureLabel">
+                        Signature liée : {{ document.linkedSignatureLabel }}
+                        <ng-container *ngIf="document.linkedSignatureDetail">
+                          · {{ document.linkedSignatureDetail }}
+                        </ng-container>
+                      </span>
+                      <span *ngIf="document.linkedProofsSummary">
+                        Preuves liées : {{ document.linkedProofsSummary }}
+                      </span>
+                      <span *ngIf="document.notes">{{ document.notes }}</span>
+                    </div>
+
+                    <div class="billing-item-actions">
+                      <div class="chips">
+                        <cfm-status-chip
+                          [label]="document.lifecycleStatusLabel"
+                          [tone]="document.lifecycleStatusTone"
+                        />
+                        <cfm-status-chip
+                          [label]="document.technicalStatusLabel"
+                          [tone]="document.technicalStatusTone"
+                        />
+                        <cfm-status-chip
+                          [label]="document.fileAvailabilityLabel"
+                          [tone]="document.fileAvailabilityTone"
+                        />
+                      </div>
+
+                      <cfm-button
+                        *ngIf="canReadOrganization"
+                        type="button"
+                        variant="secondary"
+                        [disabled]="isWorksiteDocumentDownloadBusy(document)"
+                        (click)="downloadWorksiteDocument(document)"
+                      >
+                        {{
+                          isWorksiteDocumentDownloadBusy(document)
+                            ? "Téléchargement..."
+                            : getWorksiteDocumentActionLabel(document)
+                        }}
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canAdjustWorksiteDocument(document)"
+                        type="button"
+                        variant="secondary"
+                        [disabled]="worksitePreventionPlanPdfBusyId === document.worksiteId"
+                        (click)="toggleWorksitePreventionPlanEditor(document.worksiteId)"
+                      >
+                        {{
+                          worksitePreventionPlanEditingId === document.worksiteId
+                            ? "Fermer l'ajustement"
+                            : "Ajuster le plan"
+                        }}
+                      </cfm-button>
+
+                      <cfm-button
+                        type="button"
+                        variant="secondary"
+                        (click)="toggleWorksiteDocumentDetails(document.id)"
+                      >
+                        {{
+                          selectedWorksiteDocumentDetailId === document.id
+                            ? "Masquer les éléments liés"
+                            : "Voir les éléments liés"
+                        }}
+                      </cfm-button>
+                    </div>
+
+                    <section
+                      class="document-linked-panel"
+                      *ngIf="selectedWorksiteDocumentDetailId === document.id"
+                    >
+                      <div class="detail-grid">
+                        <div class="detail-block">
+                          <span class="small">Suivi</span>
+                          <strong>{{ document.coordination.statusLabel }}</strong>
+                          <cfm-status-chip
+                            [label]="document.coordination.statusLabel"
+                            [tone]="document.coordination.statusTone"
+                          />
+                        </div>
+
+                        <div class="detail-block">
+                          <span class="small">Affectation</span>
+                          <strong>{{ document.coordination.assigneeLabel }}</strong>
+                          <span *ngIf="document.coordination.updatedAtLabel">
+                            Dernière mise à jour : {{ document.coordination.updatedAtLabel }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="detail-block">
+                        <span class="small">Commentaire simple</span>
+                        <span>
+                          {{ document.coordination.commentText || "Aucun commentaire simple pour le moment." }}
+                        </span>
+                      </div>
+
+                      <div class="detail-grid" *ngIf="canManageOrganization">
+                        <label class="field compact-field">
+                          <span>Suivi</span>
+                          <select
+                            [ngModel]="getWorksiteDocumentCoordinationDraft(document.id).status"
+                            [name]="'worksiteDocumentCoordinationStatus' + document.id"
+                            [disabled]="worksiteDocumentCoordinationBusyId === document.id"
+                            (ngModelChange)="updateWorksiteDocumentCoordinationDraft(document.id, { status: $event })"
+                          >
+                            <option value="todo">À faire</option>
+                            <option value="in_progress">En cours</option>
+                            <option value="done">Fait</option>
+                          </select>
+                        </label>
+
+                        <label
+                          class="field compact-field"
+                          *ngIf="worksiteAssignees.length > 0; else noDocumentAssignees"
+                        >
+                          <span>Affectation</span>
+                          <select
+                            [ngModel]="getWorksiteDocumentCoordinationDraft(document.id).assigneeUserId"
+                            [name]="'worksiteDocumentCoordinationAssignee' + document.id"
+                            [disabled]="worksiteDocumentCoordinationBusyId === document.id"
+                            (ngModelChange)="updateWorksiteDocumentCoordinationDraft(document.id, { assigneeUserId: $event })"
+                          >
+                            <option value="">Non affecté</option>
+                            <option
+                              *ngFor="let assignee of worksiteAssignees"
+                              [value]="assignee.user_id"
+                            >
+                              {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                            </option>
+                          </select>
+                        </label>
+
+                        <ng-template #noDocumentAssignees>
+                          <div class="detail-block">
+                            <span class="small">Affectation</span>
+                            <span>Aucun membre lisible pour affecter ce document.</span>
+                          </div>
+                        </ng-template>
+                      </div>
+
+                      <label class="field field-wide" *ngIf="canManageOrganization">
+                        <span>Commentaire simple</span>
+                        <textarea
+                          [ngModel]="getWorksiteDocumentCoordinationDraft(document.id).commentText"
+                          [name]="'worksiteDocumentCoordinationComment' + document.id"
+                          rows="3"
+                          placeholder="Ex. relire avant envoi au client"
+                          [disabled]="worksiteDocumentCoordinationBusyId === document.id"
+                          (ngModelChange)="updateWorksiteDocumentCoordinationDraft(document.id, { commentText: $event })"
+                        ></textarea>
+                      </label>
+
+                      <div class="inline-actions" *ngIf="canManageOrganization">
+                        <cfm-button
+                          type="button"
+                          [disabled]="worksiteDocumentCoordinationBusyId === document.id"
+                          (click)="saveWorksiteDocumentCoordination(document)"
+                        >
+                          {{
+                            worksiteDocumentCoordinationBusyId === document.id
+                              ? "Enregistrement..."
+                              : "Enregistrer"
+                          }}
+                        </cfm-button>
+                      </div>
+
+                      <div class="detail-block" *ngIf="document.linkedSignature as signature; else noLinkedSignature">
+                        <span class="small">Signature liée</span>
+                        <strong>{{ signature.label }}</strong>
+                        <span *ngIf="signature.detail">{{ signature.detail }}</span>
+                        <cfm-status-chip [label]="signature.statusLabel" [tone]="signature.statusTone" />
+                      </div>
+
+                      <ng-template #noLinkedSignature>
+                        <div class="detail-block">
+                          <span class="small">Signature liée</span>
+                          <span>Aucune signature liée.</span>
+                        </div>
+                      </ng-template>
+
+                      <div class="detail-block">
+                        <span class="small">Preuves liées</span>
+                        <ul class="detail-list" *ngIf="document.linkedProofs.length > 0; else noLinkedProofs">
+                          <li *ngFor="let proof of document.linkedProofs">
+                            <strong>{{ proof.label }}</strong>
+                            <span *ngIf="proof.detail">{{ proof.detail }}</span>
+                            <cfm-status-chip [label]="proof.statusLabel" [tone]="proof.statusTone" />
+                          </li>
+                        </ul>
+                        <ng-template #noLinkedProofs>
+                          <span>Aucune preuve liée.</span>
+                        </ng-template>
+                      </div>
+                    </section>
+                  </li>
+                </ul>
+
+                <ng-template #emptyWorksiteDocuments>
+                  <p class="small">Aucun document chantier à consulter pour le filtre actuel.</p>
+                </ng-template>
+              </ng-container>
+
+              <ng-template #chantierDocumentsDisabled>
+                <p class="small">Activez le module Chantier pour consulter les documents liés aux chantiers.</p>
+              </ng-template>
+            </section>
+
+            <section class="dashboard-actions">
+              <div class="dashboard-actions-header">
+                <div class="dashboard-action-copy">
+                  <h3>Vue par client</h3>
+                  <p class="small">
+                    Une lecture commerciale simple pour savoir quels clients demandent un suivi immédiat.
+                  </p>
+                </div>
+
+                <cfm-status-chip
+                  [label]="dashboardCustomerOverviewItems.length + ' client' + (dashboardCustomerOverviewItems.length > 1 ? 's' : '')"
+                  [tone]="dashboardCustomerOverviewItems.length > 0 ? 'calm' : 'neutral'"
+                />
+              </div>
+
+              <ng-container *ngIf="isFacturationEnabled; else customerOverviewDisabled">
+                <ul class="alert-list" *ngIf="dashboardCustomerOverviewItems.length > 0; else emptyCustomerOverview">
+                  <li *ngFor="let item of dashboardCustomerOverviewItems">
+                    <div class="dashboard-alert-copy">
+                      <strong>{{ item.name }}</strong>
+                      <span>{{ item.summary }}</span>
+                      <span>{{ item.context }}</span>
+                    </div>
+
+                    <div class="billing-item-actions">
+                      <div class="chips">
+                        <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
+                        <cfm-status-chip [label]="item.signalLabel" [tone]="item.signalTone" />
+                      </div>
+
+                      <cfm-button
+                        *ngIf="canManageOrganization && billingCustomers.length > 0"
+                        type="button"
+                        variant="secondary"
+                        (click)="prepareQuoteFromCustomer(item.id)"
+                      >
+                        Préparer un devis
+                      </cfm-button>
+
+                      <cfm-button
+                        *ngIf="canManageOrganization && billingCustomers.length > 0"
+                        type="button"
+                        variant="secondary"
+                        (click)="prepareInvoiceFromCustomer(item.id)"
+                      >
+                        Préparer une facture
+                      </cfm-button>
+                    </div>
+                  </li>
+                </ul>
+
+                <ng-template #emptyCustomerOverview>
+                  <p class="small">Aucun client à afficher pour le moment.</p>
+                </ng-template>
+              </ng-container>
+
+              <ng-template #customerOverviewDisabled>
+                <p class="small">Activez le module Facturation pour faire apparaître cette lecture.</p>
+              </ng-template>
+            </section>
+          </cfm-card>
+
+          <ng-container *ngIf="currentMembership" [ngTemplateOutlet]="homeAdministrationCardTemplate"></ng-container>
+
+          <cfm-card
+            *ngIf="currentMembership"
+            class="desktop-card"
+            eyebrow="S7-021"
+            title="Donner un retour"
+            description="Un format court pour remonter un blocage, une incompréhension ou une amélioration sans outil de support dédié."
+          >
+            <form class="feedback-capture-form" (ngSubmit)="copyBetaFeedback()">
+              <div class="inline-actions">
+                <label class="field compact-field">
+                  <span>Type de retour</span>
+                  <select [(ngModel)]="betaFeedbackCategory" name="betaFeedbackCategory">
+                    <option value="blocking">Bloquant</option>
+                    <option value="unclear">Incompréhension</option>
+                    <option value="improvement">Amélioration</option>
+                    <option value="positive">Retour positif</option>
+                  </select>
+                </label>
+
+                <label class="field compact-field">
+                  <span>Zone concernée</span>
+                  <select [(ngModel)]="betaFeedbackArea" name="betaFeedbackArea">
+                    <option value="cockpit">Cockpit</option>
+                    <option value="worksite">Chantier</option>
+                    <option value="worksite_document">Documents chantier</option>
+                    <option value="facturation">Facturation</option>
+                    <option value="reglementation">Réglementation</option>
+                    <option value="sync">Synchronisation visible</option>
+                    <option value="other">Autre</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="field field-wide">
+                <span>Message libre court</span>
+                <textarea
+                  [(ngModel)]="betaFeedbackMessageText"
+                  name="betaFeedbackMessageText"
+                  rows="4"
+                  placeholder="Ex. Je ne comprends pas si le document chantier est prêt ou encore en préparation."
+                ></textarea>
+              </label>
+
+              <p class="small">
+                Le retour est préparé dans un format simple à coller ensuite dans votre canal beta ou pilote
+                habituel.
+              </p>
+
+              <div class="form-actions inline-actions">
+                <cfm-button type="submit" [disabled]="betaFeedbackCopyBusy || !canCopyBetaFeedback">
+                  {{ betaFeedbackCopyBusy ? "Copie..." : "Copier le retour" }}
+                </cfm-button>
+
+                <cfm-button
+                  type="button"
+                  variant="secondary"
+                  [disabled]="betaFeedbackCopyBusy || !hasBetaFeedbackDraft"
+                  (click)="resetBetaFeedback()"
+                >
+                  Effacer
+                </cfm-button>
+              </div>
+            </form>
+
+            <p class="feedback error" *ngIf="betaFeedbackError">{{ betaFeedbackError }}</p>
+            <p class="feedback success" *ngIf="betaFeedbackNotice && !betaFeedbackError">{{ betaFeedbackNotice }}</p>
+
+            <section class="document-preview" *ngIf="hasBetaFeedbackDraft">
+              <div class="document-preview-header">
+                <strong>Aperçu du retour</strong>
+                <span class="small">La date et l’organisation seront ajoutées lors de la copie.</span>
+              </div>
+              <pre class="feedback-preview-text">{{ betaFeedbackPreviewText }}</pre>
+            </section>
+          </cfm-card>
+          </ng-template>
+
+          <ng-template #reglementationPageTemplate>
+          <cfm-card
+            *ngIf="shouldShowInitialWorkspaceLoading"
             class="desktop-card"
             eyebrow="Réglementation"
             title="Chargement en cours"
             description="Le profil entreprise et les sites sont en train d’être chargés."
-          />
+          >
+            <div class="loading-state-card" aria-hidden="true">
+              <div class="loading-state-hero"></div>
+              <div class="loading-state-grid">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="loading-state-lines">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </cfm-card>
 
           <cfm-card
-            *ngIf="!organizationWorkspaceLoading && currentMembership && !isReglementationEnabled"
+            *ngIf="shouldShowWorkspaceContent && currentMembership && !isReglementationEnabled"
             class="desktop-card"
             eyebrow="Réglementation"
             title="Module non activé"
@@ -293,7 +1673,7 @@ type BillingDraftRecord<TPayload> = {
             />
           </cfm-card>
 
-          <ng-container *ngIf="!organizationWorkspaceLoading && currentMembership && isReglementationEnabled">
+          <ng-container *ngIf="shouldShowWorkspaceContent && currentMembership && isReglementationEnabled">
             <cfm-card
               *ngIf="isOnboardingPending"
               class="desktop-card"
@@ -1314,9 +2694,11 @@ type BillingDraftRecord<TPayload> = {
               </ng-template>
             </cfm-card>
           </ng-container>
+          </ng-template>
 
+          <ng-template #facturationPageTemplate>
           <cfm-card
-            *ngIf="!organizationWorkspaceLoading && currentMembership && !isFacturationEnabled"
+            *ngIf="shouldShowWorkspaceContent && currentMembership && !isFacturationEnabled"
             class="desktop-card"
             eyebrow="Facturation"
             title="Module non activé"
@@ -1328,7 +2710,7 @@ type BillingDraftRecord<TPayload> = {
             />
           </cfm-card>
 
-          <ng-container *ngIf="!organizationWorkspaceLoading && currentMembership && isFacturationEnabled">
+          <ng-container *ngIf="shouldShowWorkspaceContent && currentMembership && isFacturationEnabled">
             <cfm-card
               class="desktop-card"
               eyebrow="S3-001"
@@ -1457,15 +2839,34 @@ type BillingDraftRecord<TPayload> = {
                     <span *ngIf="customer.notes">{{ customer.notes }}</span>
                   </div>
 
-                  <cfm-button
-                    *ngIf="canManageOrganization"
-                    type="button"
-                    variant="secondary"
-                    [disabled]="customerSaving"
-                    (click)="startEditingCustomer(customer)"
-                  >
-                    Modifier
-                  </cfm-button>
+                  <div class="billing-item-actions" *ngIf="canManageOrganization">
+                    <cfm-button
+                      type="button"
+                      variant="secondary"
+                      [disabled]="customerSaving"
+                      (click)="startEditingCustomer(customer)"
+                    >
+                      Modifier
+                    </cfm-button>
+
+                    <cfm-button
+                      type="button"
+                      variant="secondary"
+                      [disabled]="customerSaving"
+                      (click)="prepareQuoteFromCustomer(customer.id)"
+                    >
+                      Préparer un devis
+                    </cfm-button>
+
+                    <cfm-button
+                      type="button"
+                      variant="secondary"
+                      [disabled]="customerSaving"
+                      (click)="prepareInvoiceFromCustomer(customer.id)"
+                    >
+                      Préparer une facture
+                    </cfm-button>
+                  </div>
                 </li>
               </ul>
 
@@ -1480,6 +2881,7 @@ type BillingDraftRecord<TPayload> = {
             </cfm-card>
 
             <cfm-card
+              id="billing-quote-card"
               class="desktop-card"
               eyebrow="S3-002"
               title="Devis simple"
@@ -1943,6 +3345,7 @@ type BillingDraftRecord<TPayload> = {
             </cfm-card>
 
             <cfm-card
+              id="billing-invoice-card"
               class="desktop-card"
               eyebrow="S3-003"
               title="Facture simple"
@@ -2444,12 +3847,344 @@ type BillingDraftRecord<TPayload> = {
               </ng-template>
             </cfm-card>
           </ng-container>
+          </ng-template>
 
-          <p class="feedback error" *ngIf="errorMessage">{{ errorMessage }}</p>
-          <p class="feedback success" *ngIf="feedbackMessage && !errorMessage">{{ feedbackMessage }}</p>
-        </section>
-      </ng-template>
-    </main>
+          <ng-template #coordinationPageTemplate>
+            <cfm-card
+              *ngIf="shouldShowWorkspaceContent && currentMembership"
+              class="desktop-card"
+              eyebrow="Coordination"
+              title="À traiter"
+              description="Une lecture simple des chantiers et documents encore ouverts, avec filtres légers par suivi et affectation."
+            >
+              <section class="dashboard-actions">
+                <div class="dashboard-actions-header">
+                  <div class="dashboard-action-copy">
+                    <h3>Coordination légère</h3>
+                    <p class="small">
+                      Retrouvez vite ce qui reste à faire sans ouvrir un gestionnaire de tâches complet.
+                    </p>
+                  </div>
+
+                  <cfm-status-chip
+                    [label]="coordinationTodoCountLabel"
+                    [tone]="coordinationTodoItems.length > 0 ? 'progress' : 'success'"
+                  />
+                </div>
+
+                <ng-container *ngIf="isChantierEnabled; else standaloneCoordinationDisabled">
+                  <div class="inline-actions">
+                    <label class="compact-field">
+                      <span class="small">Suivi</span>
+                      <select [(ngModel)]="selectedCoordinationStatusFilter" name="coordinationPageStatusFilter">
+                        <option value="all">Tous les suivis</option>
+                        <option value="todo">À faire</option>
+                        <option value="in_progress">En cours</option>
+                        <option value="done">Fait</option>
+                      </select>
+                    </label>
+
+                    <label class="compact-field">
+                      <span class="small">Affectation</span>
+                      <select [(ngModel)]="selectedCoordinationAssigneeFilter" name="coordinationPageAssigneeFilter">
+                        <option value="all">Toutes les affectations</option>
+                        <option value="unassigned">Non affecté</option>
+                        <option *ngFor="let assignee of worksiteAssignees" [value]="assignee.user_id">
+                          {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                        </option>
+                      </select>
+                    </label>
+
+                    <cfm-button
+                      *ngIf="hasActiveCoordinationFilters"
+                      type="button"
+                      variant="secondary"
+                      (click)="resetCoordinationFilters()"
+                    >
+                      Réinitialiser les filtres
+                    </cfm-button>
+                  </div>
+
+                  <ul class="alert-list" *ngIf="coordinationTodoItems.length > 0; else emptyStandaloneCoordinationTodo">
+                    <li *ngFor="let item of coordinationTodoItems">
+                      <div class="dashboard-alert-copy">
+                        <strong>{{ item.title }}</strong>
+                        <span>{{ item.description }}</span>
+                        <span *ngIf="item.context">{{ item.context }}</span>
+                      </div>
+
+                      <div class="billing-item-actions">
+                        <div class="chips">
+                          <cfm-status-chip [label]="item.kindLabel" [tone]="item.kindTone" />
+                          <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
+                        </div>
+
+                        <cfm-button
+                          type="button"
+                          variant="secondary"
+                          (click)="openCoordinationTodoItem(item)"
+                        >
+                          {{ item.kind === "worksite" ? "Voir le chantier" : "Voir le document" }}
+                        </cfm-button>
+                      </div>
+                    </li>
+                  </ul>
+
+                  <ng-template #emptyStandaloneCoordinationTodo>
+                    <p class="small">
+                      {{
+                        hasActiveCoordinationFilters
+                          ? "Aucun élément coordonné ne correspond aux filtres."
+                          : "Aucun chantier ni document coordonné à traiter pour le moment."
+                      }}
+                    </p>
+                  </ng-template>
+                </ng-container>
+
+                <ng-template #standaloneCoordinationDisabled>
+                  <cfm-empty-state
+                    title="Module Chantier non activé"
+                    description="Activez le module Chantier pour utiliser cette vue de coordination."
+                  />
+                </ng-template>
+              </section>
+            </cfm-card>
+          </ng-template>
+
+          <ng-template #chantierPageTemplate>
+            <cfm-card
+              *ngIf="shouldShowWorkspaceContent && currentMembership"
+              class="desktop-card"
+              eyebrow="Chantier"
+              title="Vue chantier"
+              description="Une lecture plus directe des chantiers, de leurs signaux et des actions utiles sans passer par le cockpit global."
+            >
+              <section class="dashboard-actions" id="worksite-overview-section">
+                <div class="dashboard-actions-header">
+                  <div class="dashboard-action-copy">
+                    <h3>Chantiers</h3>
+                    <p class="small">
+                      Les chantiers ressortent avec leur statut général, leurs signaux simples et les actions utiles.
+                    </p>
+                  </div>
+
+                  <cfm-status-chip
+                    [label]="worksiteOverviewCountLabel"
+                    [tone]="filteredDashboardWorksiteOverviewItems.length > 0 ? 'calm' : 'neutral'"
+                  />
+                </div>
+
+                <ng-container *ngIf="isChantierEnabled; else standaloneWorksiteDisabled">
+                  <ul class="alert-list" *ngIf="filteredDashboardWorksiteOverviewItems.length > 0; else emptyStandaloneWorksiteOverview">
+                    <li *ngFor="let item of filteredDashboardWorksiteOverviewItems">
+                      <div class="dashboard-alert-copy">
+                        <strong>{{ item.name }}</strong>
+                        <span>{{ item.summary }}</span>
+                        <span>{{ item.operationalSummary }}</span>
+                        <span>{{ item.taskSummary }}</span>
+                        <span>
+                          Coordination : {{ item.coordination.statusLabel }} · {{ item.coordination.assigneeLabel }}
+                        </span>
+                        <span *ngIf="item.coordination.commentText">{{ item.coordination.commentSummary }}</span>
+                        <span *ngIf="item.coordination.updatedAtLabel">
+                          Dernier suivi : {{ item.coordination.updatedAtLabel }}
+                        </span>
+                        <span>{{ item.linkedWorksiteDocumentsSummary }}</span>
+                        <span>{{ item.linkedQuotesSummary }}</span>
+                        <span>{{ item.linkedInvoicesSummary }}</span>
+                        <span *ngIf="item.financialSummary">{{ item.financialSummary }}</span>
+                      </div>
+
+                      <div class="billing-item-actions">
+                        <div class="chips">
+                          <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
+                          <cfm-status-chip [label]="item.signalLabel" [tone]="item.signalTone" />
+                        </div>
+
+                        <cfm-button
+                          *ngIf="canManageOrganization && isFacturationEnabled && billingCustomers.length > 0"
+                          type="button"
+                          variant="secondary"
+                          (click)="prepareQuoteFromWorksite(item.id)"
+                        >
+                          Préparer un devis
+                        </cfm-button>
+
+                        <cfm-button
+                          *ngIf="canManageOrganization && isFacturationEnabled && billingCustomers.length > 0"
+                          type="button"
+                          variant="secondary"
+                          (click)="prepareInvoiceFromWorksite(item.id)"
+                        >
+                          Préparer une facture
+                        </cfm-button>
+
+                        <cfm-button
+                          *ngIf="canReadOrganization"
+                          type="button"
+                          variant="secondary"
+                          [disabled]="worksiteDocumentPdfBusyId === item.id"
+                          (click)="exportWorksiteSummaryPdf(item.id)"
+                        >
+                          {{ worksiteDocumentPdfBusyId === item.id ? "Génération..." : "Fiche chantier PDF" }}
+                        </cfm-button>
+
+                        <cfm-button
+                          *ngIf="canReadOrganization"
+                          type="button"
+                          variant="secondary"
+                          [disabled]="worksitePreventionPlanPdfBusyId === item.id"
+                          (click)="toggleWorksitePreventionPlanEditor(item.id)"
+                        >
+                          {{
+                            worksitePreventionPlanEditingId === item.id
+                              ? "Fermer le plan"
+                              : "Ajuster le plan"
+                          }}
+                        </cfm-button>
+
+                        <cfm-button
+                          *ngIf="item.worksiteDocumentsCount > 0"
+                          type="button"
+                          variant="secondary"
+                          (click)="focusWorksiteDocuments(item.id)"
+                        >
+                          Voir les documents
+                        </cfm-button>
+
+                        <cfm-button
+                          *ngIf="canReadOrganization"
+                          type="button"
+                          variant="secondary"
+                          (click)="toggleWorksiteCoordination(item.id)"
+                        >
+                          {{
+                            selectedWorksiteCoordinationId === item.id
+                              ? "Masquer la coordination"
+                              : "Coordination simple"
+                          }}
+                        </cfm-button>
+                      </div>
+
+                      <section class="document-linked-panel" *ngIf="selectedWorksiteCoordinationId === item.id">
+                        <div class="detail-grid">
+                          <div class="detail-block">
+                            <span class="small">Suivi</span>
+                            <strong>{{ item.coordination.statusLabel }}</strong>
+                            <cfm-status-chip
+                              [label]="item.coordination.statusLabel"
+                              [tone]="item.coordination.statusTone"
+                            />
+                          </div>
+
+                          <div class="detail-block">
+                            <span class="small">Affectation</span>
+                            <strong>{{ item.coordination.assigneeLabel }}</strong>
+                            <span *ngIf="item.coordination.updatedAtLabel">
+                              Dernière mise à jour : {{ item.coordination.updatedAtLabel }}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div class="detail-block">
+                          <span class="small">Commentaire simple</span>
+                          <span>
+                            {{ item.coordination.commentText || "Aucun commentaire simple pour le moment." }}
+                          </span>
+                        </div>
+
+                        <div class="detail-grid" *ngIf="canManageOrganization">
+                          <label class="field compact-field">
+                            <span>Suivi</span>
+                            <select
+                              [ngModel]="getWorksiteCoordinationDraft(item.id).status"
+                              [name]="'worksiteStandaloneCoordinationStatus' + item.id"
+                              [disabled]="worksiteCoordinationBusyId === item.id"
+                              (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { status: $event })"
+                            >
+                              <option value="todo">À faire</option>
+                              <option value="in_progress">En cours</option>
+                              <option value="done">Fait</option>
+                            </select>
+                          </label>
+
+                          <label
+                            class="field compact-field"
+                            *ngIf="worksiteAssignees.length > 0; else noStandaloneWorksiteAssignees"
+                          >
+                            <span>Affectation</span>
+                            <select
+                              [ngModel]="getWorksiteCoordinationDraft(item.id).assigneeUserId"
+                              [name]="'worksiteStandaloneCoordinationAssignee' + item.id"
+                              [disabled]="worksiteCoordinationBusyId === item.id"
+                              (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { assigneeUserId: $event })"
+                            >
+                              <option value="">Non affecté</option>
+                              <option *ngFor="let assignee of worksiteAssignees" [value]="assignee.user_id">
+                                {{ getWorksiteAssigneeOptionLabel(assignee) }}
+                              </option>
+                            </select>
+                          </label>
+
+                          <ng-template #noStandaloneWorksiteAssignees>
+                            <div class="detail-block">
+                              <span class="small">Affectation</span>
+                              <span>Aucun membre lisible pour affecter ce chantier.</span>
+                            </div>
+                          </ng-template>
+                        </div>
+
+                        <label class="field field-wide" *ngIf="canManageOrganization">
+                          <span>Commentaire simple</span>
+                          <textarea
+                            [ngModel]="getWorksiteCoordinationDraft(item.id).commentText"
+                            [name]="'worksiteStandaloneCoordinationComment' + item.id"
+                            rows="3"
+                            placeholder="Ex. appeler le client avant l'intervention"
+                            [disabled]="worksiteCoordinationBusyId === item.id"
+                            (ngModelChange)="updateWorksiteCoordinationDraft(item.id, { commentText: $event })"
+                          ></textarea>
+                        </label>
+
+                        <div class="inline-actions" *ngIf="canManageOrganization">
+                          <cfm-button
+                            type="button"
+                            [disabled]="worksiteCoordinationBusyId === item.id"
+                            (click)="saveWorksiteCoordination(item)"
+                          >
+                            {{
+                              worksiteCoordinationBusyId === item.id
+                                ? "Enregistrement..."
+                                : "Enregistrer"
+                            }}
+                          </cfm-button>
+                        </div>
+                      </section>
+                    </li>
+                  </ul>
+
+                  <ng-template #emptyStandaloneWorksiteOverview>
+                    <p class="small">
+                      {{
+                        hasActiveCoordinationFilters
+                          ? "Aucun chantier ne correspond aux filtres de coordination."
+                          : "Aucun chantier à afficher pour le moment."
+                      }}
+                    </p>
+                  </ng-template>
+                </ng-container>
+
+                <ng-template #standaloneWorksiteDisabled>
+                  <cfm-empty-state
+                    title="Module Chantier non activé"
+                    description="Activez le module Chantier pour afficher les chantiers dans cette vue."
+                  />
+                </ng-template>
+              </section>
+            </cfm-card>
+          </ng-template>
+
+    
   `,
   styles: [
     `
@@ -2463,23 +4198,40 @@ type BillingDraftRecord<TPayload> = {
         display: grid;
         place-items: center;
         padding: 2rem;
+        background:
+          radial-gradient(circle at top, rgba(245, 188, 88, 0.16), transparent 22%),
+          linear-gradient(180deg, #f7f2e9 0%, #eef4f1 100%);
       }
 
       .shell-workspace {
         place-items: start center;
         background:
-          radial-gradient(circle at top left, rgba(201, 224, 215, 0.5), transparent 28%),
-          linear-gradient(180deg, #f6f3eb 0%, #edf4f2 100%);
+          radial-gradient(circle at top left, rgba(201, 224, 215, 0.58), transparent 28%),
+          radial-gradient(circle at top right, rgba(245, 188, 88, 0.2), transparent 24%),
+          linear-gradient(180deg, #f7f2e9 0%, #eef4f1 100%);
       }
 
       .workspace {
         width: min(1100px, 100%);
         display: grid;
-        gap: 1.25rem;
+        gap: 1.4rem;
+        padding-bottom: 2rem;
+      }
+
+      .app-shell {
+        align-content: start;
+      }
+
+      .workspace-body,
+      .workspace-page {
+        display: grid;
+        gap: 1.4rem;
       }
 
       .desktop-card {
         width: min(1100px, 100%);
+        position: relative;
+        isolation: isolate;
       }
 
       .auth-form,
@@ -2547,6 +4299,11 @@ type BillingDraftRecord<TPayload> = {
         display: grid;
       }
 
+      .field span {
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
       .field-wide {
         grid-column: 1 / -1;
       }
@@ -2559,13 +4316,34 @@ type BillingDraftRecord<TPayload> = {
         border-radius: var(--cfm-radius-field);
         padding: 0.85rem 1rem;
         font: inherit;
-        background: var(--cfm-color-surface);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 252, 252, 0.94));
         color: var(--cfm-color-ink);
+        transition:
+          border-color 0.18s ease,
+          box-shadow 0.18s ease,
+          background-color 0.18s ease,
+          transform 0.18s ease;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       textarea {
         resize: vertical;
         min-height: 6.5rem;
+      }
+
+      select:focus,
+      textarea:focus {
+        outline: none;
+        border-color: #8ba79a;
+        background: #ffffff;
+        box-shadow:
+          0 0 0 4px rgba(139, 167, 154, 0.16),
+          0 14px 30px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(15, 23, 42, 0.03);
+        transform: translateY(-1px);
       }
 
       .session-header {
@@ -2577,6 +4355,33 @@ type BillingDraftRecord<TPayload> = {
       .session-actions {
         gap: 1rem;
         justify-items: end;
+      }
+
+      .workspace-shell-copy,
+      .workspace-shell-actions {
+        display: grid;
+        gap: 0.8rem;
+      }
+
+      .app-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem;
+        padding: 0.35rem 0.15rem 0.2rem;
+      }
+
+      .app-nav-link {
+        display: inline-flex;
+        text-decoration: none;
+        transition: transform 0.16s ease, opacity 0.16s ease;
+      }
+
+      .app-nav-link:hover {
+        transform: translateY(-1px);
+      }
+
+      .app-nav-link.is-active {
+        transform: translateY(-1px);
       }
 
       .meta,
@@ -2591,9 +4396,37 @@ type BillingDraftRecord<TPayload> = {
       }
 
       article {
-        padding: 1.25rem;
-        border-radius: 20px;
-        background: #f4f1ea;
+        position: relative;
+        overflow: hidden;
+        padding: 1.3rem;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(247, 243, 234, 0.84)),
+          #f4f1ea;
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 16px 36px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+      }
+
+      article::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 3px;
+        background: linear-gradient(90deg, rgba(29, 109, 100, 0.88), rgba(245, 188, 88, 0.72));
+        opacity: 0.95;
+      }
+
+      article:hover {
+        transform: translateY(-2px);
+        box-shadow:
+          0 22px 44px rgba(18, 33, 42, 0.08),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
       }
 
       .chips {
@@ -2644,6 +4477,35 @@ type BillingDraftRecord<TPayload> = {
         align-items: start;
         justify-content: space-between;
         gap: 1rem;
+        position: relative;
+        padding: 1.08rem 1.15rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 250, 249, 0.78));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 12px 24px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+      }
+
+      .stack-list li:hover,
+      .module-list li:hover,
+      .customer-list li:hover,
+      .site-list li:hover,
+      .alert-list li:hover,
+      .building-safety-list li:hover,
+      .billing-list li:hover,
+      .duerp-list li:hover,
+      .evidence-list li:hover {
+        transform: translateY(-1px);
+        box-shadow:
+          0 16px 30px rgba(18, 33, 42, 0.07),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        border-color: rgba(29, 109, 100, 0.14);
       }
 
       .list-copy,
@@ -2659,18 +4521,27 @@ type BillingDraftRecord<TPayload> = {
       .obligation-copy {
         display: grid;
         gap: 0.45rem;
-        padding: 1rem 1.1rem;
-        border-radius: 18px;
-        background: #f4f6f1;
+        padding: 1.1rem 1.15rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(244, 246, 241, 0.96), rgba(255, 255, 255, 0.86));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 12px 24px rgba(18, 33, 42, 0.04);
       }
 
       .obligation-detail {
         display: grid;
         gap: 1rem;
         margin-top: 1.25rem;
-        padding: 1.1rem 1.2rem;
-        border-radius: 20px;
-        background: #eef3ef;
+        padding: 1.2rem 1.25rem;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(238, 243, 239, 0.96), rgba(255, 255, 255, 0.8));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 16px 34px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.8);
+        animation: panelReveal 180ms ease;
       }
 
       .detail-grid {
@@ -2686,9 +4557,11 @@ type BillingDraftRecord<TPayload> = {
       }
 
       .detail-block {
-        padding: 1rem;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.55);
+        padding: 1.05rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(250, 252, 252, 0.74));
+        border: 1px solid rgba(15, 23, 42, 0.05);
       }
 
       .detail-list {
@@ -2713,9 +4586,14 @@ type BillingDraftRecord<TPayload> = {
 
       .modules {
         gap: 1rem;
-        padding: 1.5rem;
-        border-radius: 24px;
-        background: #eff4f5;
+        padding: 1.42rem 1.48rem;
+        border-radius: 28px;
+        background:
+          linear-gradient(180deg, rgba(245, 249, 249, 0.96), rgba(234, 241, 239, 0.94));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.82),
+          0 18px 40px rgba(18, 33, 42, 0.06);
       }
 
       .modules-header {
@@ -2732,6 +4610,107 @@ type BillingDraftRecord<TPayload> = {
         gap: 1rem;
       }
 
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1.05rem;
+        margin: 1.15rem 0 1.35rem;
+      }
+
+      .dashboard-kpi-card,
+      .dashboard-alert-copy {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .dashboard-kpi-card {
+        position: relative;
+        overflow: hidden;
+        padding: 1.08rem 1.12rem 1.12rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 246, 241, 0.92));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 14px 28px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
+      }
+
+      .dashboard-kpi-card::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        height: 48%;
+        background: linear-gradient(180deg, transparent, rgba(29, 109, 100, 0.06));
+        pointer-events: none;
+      }
+
+      .dashboard-module-highlights {
+        list-style: none;
+        padding: 0;
+        margin: 0.2rem 0 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .dashboard-module-highlights li {
+        display: grid;
+        gap: 0.15rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+      }
+
+      .dashboard-kpi-value {
+        font-size: 2.15rem;
+        line-height: 0.96;
+        letter-spacing: -0.03em;
+        color: var(--cfm-color-ink);
+      }
+
+      .dashboard-alerts {
+        display: grid;
+        gap: 0.9rem;
+        padding: 1.08rem 1.15rem;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(246, 250, 249, 0.74));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 14px 28px rgba(18, 33, 42, 0.05);
+      }
+
+      .dashboard-actions {
+        display: grid;
+        gap: 0.9rem;
+        margin-top: 1.35rem;
+        padding: 1.08rem 1.15rem;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(246, 250, 249, 0.74));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 14px 28px rgba(18, 33, 42, 0.05);
+      }
+
+      .dashboard-actions-header {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: end;
+        gap: 1rem;
+      }
+
+      .dashboard-action-copy {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .dashboard-filter {
+        max-width: 240px;
+      }
+
+      .dashboard-alert-copy span {
+        line-height: 1.35;
+      }
+
       .toggle {
         display: inline-flex;
         align-items: center;
@@ -2744,6 +4723,25 @@ type BillingDraftRecord<TPayload> = {
 
       .profile-form {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .auth-form,
+      .customer-form,
+      .billing-form,
+      .profile-form,
+      .site-form,
+      .building-safety-form,
+      .duerp-form,
+      .evidence-form,
+      .feedback-capture-form {
+        padding: 1.1rem 1.15rem;
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 250, 249, 0.82));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 14px 32px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
       }
 
       .customer-form {
@@ -2784,9 +4782,12 @@ type BillingDraftRecord<TPayload> = {
         grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr)) auto;
         align-items: end;
         gap: 0.75rem;
-        padding: 1rem;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.55);
+        padding: 1.02rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 250, 249, 0.76));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 12px 24px rgba(18, 33, 42, 0.05);
       }
 
       .form-actions {
@@ -2797,34 +4798,132 @@ type BillingDraftRecord<TPayload> = {
       .inline-actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.75rem;
+        gap: 0.8rem;
       }
 
       .billing-item-actions {
         display: grid;
-        gap: 0.75rem;
+        gap: 0.8rem;
         justify-items: stretch;
+        align-content: start;
         min-width: min(260px, 100%);
+        padding: 0.15rem;
       }
 
       .compact-field {
         min-width: 180px;
+        padding: 0.85rem 0.95rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 250, 249, 0.76));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.8),
+          0 10px 22px rgba(18, 33, 42, 0.04);
+      }
+
+      .inline-choice-list {
+        display: grid;
+        gap: 0.5rem;
+        padding: 0.9rem 1rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 250, 249, 0.78));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 12px 24px rgba(18, 33, 42, 0.04);
+      }
+
+      .inline-choice {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+      }
+
+      .inline-choice input {
+        width: auto;
+      }
+
+      .document-linked-panel {
+        display: grid;
+        gap: 0.8rem;
+        padding: 1.05rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(239, 245, 242, 0.82));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 16px 34px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        animation: panelReveal 180ms ease;
       }
 
       .payment-form {
         display: grid;
         gap: 0.75rem;
         padding: 1rem;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.55);
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 250, 249, 0.76));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 12px 24px rgba(18, 33, 42, 0.04);
+      }
+
+      .document-adjustment-form {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+        padding: 1.08rem;
+        margin-top: 0.9rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 245, 242, 0.84));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 18px 38px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
+        animation: panelReveal 180ms ease;
+      }
+
+      .document-preview,
+      .document-preview-header {
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .feedback-capture-form {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .document-preview {
+        padding: 1.05rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(238, 243, 239, 0.96), rgba(255, 255, 255, 0.82));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow: 0 12px 28px rgba(18, 33, 42, 0.05);
+      }
+
+      .feedback-preview-text {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: inherit;
+        color: var(--cfm-color-copy-muted);
       }
 
       .billing-history {
         display: grid;
         gap: 0.75rem;
-        padding: 1rem;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.55);
+        padding: 1.04rem;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(239, 245, 242, 0.82));
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 16px 34px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        animation: panelReveal 180ms ease;
       }
 
       .history-list {
@@ -2838,6 +4937,14 @@ type BillingDraftRecord<TPayload> = {
       .history-copy {
         display: grid;
         gap: 0.2rem;
+      }
+
+      .history-list li {
+        padding: 0.9rem 0.95rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(15, 23, 42, 0.05);
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .site-heading {
@@ -2868,12 +4975,134 @@ type BillingDraftRecord<TPayload> = {
         margin-bottom: 1rem;
       }
 
+      .feedback {
+        position: relative;
+        display: grid;
+        gap: 0.2rem;
+        margin-top: 1rem;
+        padding: 0.95rem 1rem 0.95rem 1.15rem;
+        border-radius: 20px;
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 250, 249, 0.84));
+        box-shadow:
+          0 14px 30px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        animation: feedbackPulse 220ms ease;
+      }
+
+      .feedback::before {
+        content: "";
+        position: absolute;
+        left: 0.8rem;
+        top: 0.95rem;
+        bottom: 0.95rem;
+        width: 4px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.24;
+      }
+
       .feedback.error {
         color: #8a2d2d;
+        background:
+          linear-gradient(180deg, rgba(254, 243, 241, 0.98), rgba(255, 255, 255, 0.88));
       }
 
       .feedback.success {
         color: #1f6a47;
+        background:
+          linear-gradient(180deg, rgba(239, 250, 245, 0.98), rgba(255, 255, 255, 0.88));
+      }
+
+      .feedback.progress {
+        color: #7c5b20;
+        background:
+          linear-gradient(180deg, rgba(255, 247, 228, 0.98), rgba(255, 255, 255, 0.88));
+      }
+
+      .loading-state-card {
+        display: grid;
+        gap: 1rem;
+        padding: 0.15rem 0 0.2rem;
+      }
+
+      .loading-state-hero,
+      .loading-state-grid span,
+      .loading-state-lines span {
+        display: block;
+        border-radius: 999px;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.72), rgba(232, 239, 237, 0.96), rgba(255, 255, 255, 0.72));
+        background-size: 220% 100%;
+        animation: skeletonPulse 1.35s ease-in-out infinite;
+      }
+
+      .loading-state-hero {
+        height: 1.1rem;
+        width: min(320px, 72%);
+      }
+
+      .loading-state-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.85rem;
+      }
+
+      .loading-state-grid span {
+        height: 5.6rem;
+        border-radius: 22px;
+      }
+
+      .loading-state-lines {
+        display: grid;
+        gap: 0.7rem;
+      }
+
+      .loading-state-lines span {
+        height: 0.95rem;
+      }
+
+      .loading-state-lines span:nth-child(2) {
+        width: 88%;
+      }
+
+      .loading-state-lines span:nth-child(3) {
+        width: 68%;
+      }
+
+      @keyframes skeletonPulse {
+        0% {
+          background-position: 100% 50%;
+        }
+
+        100% {
+          background-position: 0% 50%;
+        }
+      }
+
+      @keyframes panelReveal {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes feedbackPulse {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       code {
@@ -2889,8 +5118,10 @@ type BillingDraftRecord<TPayload> = {
         .building-safety-form,
         .duerp-form,
         .evidence-form,
+        .document-adjustment-form,
         .billing-line-editor,
-        .detail-grid {
+        .detail-grid,
+        .loading-state-grid {
           grid-template-columns: 1fr;
         }
 
@@ -2923,7 +5154,18 @@ type BillingDraftRecord<TPayload> = {
     `
   ]
 })
-export class AppComponent implements DoCheck {
+export class AppComponent implements DoCheck, DesktopShellContext {
+  private static readonly REGULATORY_WORKSPACE_SEGMENT_LABELS = [
+    "building-safety-alerts",
+    "duerp-entries",
+    "regulatory-evidences",
+  ] as const;
+  private static readonly DISABLE_BOOTSTRAP_SESSION_RESTORE = false;
+  private static readonly DISABLE_DO_CHECK_PERSISTENCE = false;
+  private static readonly WORKSPACE_LOADING_DISABLED = false;
+  private static readonly WORKSPACE_DEBUG_ONLY_LABEL: string | null = null;
+  private static readonly DISABLE_DEFERRED_WORKSPACE_SCROLL = false;
+  private readonly router = inject(Router);
   email = "";
   password = "";
   loading = false;
@@ -2932,7 +5174,14 @@ export class AppComponent implements DoCheck {
   session: AuthSession | null = null;
   accessToken = getStoredAccessToken();
   selectedOrganizationId = getStoredOrganizationId();
+  sessionRestoreInProgress = false;
   organizationWorkspaceLoading = false;
+  private workspaceRefreshInFlight: Promise<void> | null = null;
+  private workspaceRefreshScheduledHandle: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private workspaceRefreshScheduledOrganizationId: string | null = null;
+  private workspaceRefreshScheduledReason: string | null = null;
+  private workspaceHydratedOrganizationId: string | null = null;
+  private workspaceSegmentIssues: Partial<Record<string, string>> = {};
   regulatoryExporting = false;
   organizationProfileSaving = false;
   organizationSiteSaving = false;
@@ -2946,6 +5195,36 @@ export class AppComponent implements DoCheck {
   customerSearchTerm = "";
   billingCustomers: BillingCustomerRecord[] = [];
   billingWorksites: WorksiteApiSummary[] = [];
+  worksiteDocuments: WorksiteDocumentRecord[] = [];
+  worksiteProofs: WorksiteProofRecord[] = [];
+  worksiteSignatures: WorksiteSignatureRecord[] = [];
+  worksiteAssignees: WorksiteAssigneeRecord[] = [];
+  selectedWorksiteCoordinationId: string | null = null;
+  selectedCoordinationStatusFilter: CoordinationStatusFilter = "all";
+  selectedCoordinationAssigneeFilter: CoordinationAssigneeFilter = "all";
+  selectedWorksiteDocumentFilterId = "all";
+  selectedWorksiteDocumentTypeFilter = "all";
+  selectedWorksiteDocumentLifecycleFilter: WorksiteDocumentLifecycleFilter = "all";
+  selectedWorksiteDocumentDetailId: string | null = null;
+  worksiteDocumentDownloadBusyId: string | null = null;
+  worksiteDocumentPdfBusyId: string | null = null;
+  worksiteCoordinationBusyId: string | null = null;
+  worksiteDocumentCoordinationBusyId: string | null = null;
+  worksiteDocumentStatusBusyId: string | null = null;
+  worksiteDocumentProofBusyId: string | null = null;
+  worksiteDocumentSignatureBusyId: string | null = null;
+  worksitePreventionPlanPdfBusyId: string | null = null;
+  worksitePreventionPlanEditingId: string | null = null;
+  worksiteCoordinationDrafts: Record<string, CoordinationDraftForm> = {};
+  worksiteDocumentCoordinationDrafts: Record<string, CoordinationDraftForm> = {};
+  worksitePreventionPlanForm: WorksitePreventionPlanForm = {
+    usefulDate: "",
+    interventionContext: "",
+    vigilancePoints: "",
+    measurePoints: "",
+    additionalContact: "",
+  };
+  private worksitePreventionPlanInitialForm: WorksitePreventionPlanForm | null = null;
   private billingDraftsHydratedScope: string | null = null;
   private quoteDraftSnapshot = "";
   private invoiceDraftSnapshot = "";
@@ -2974,6 +5253,7 @@ export class AppComponent implements DoCheck {
   invoiceHistoryOpenId: string | null = null;
   invoiceHistoryById: Record<string, AuditLogRecord[]> = {};
   invoices: InvoiceRecord[] = [];
+  cockpitSummary: CockpitSummaryRecord | null = null;
   buildingSafetySaving = false;
   buildingSafetyStatusBusyId: string | null = null;
   buildingSafetyEditingId: string | null = null;
@@ -2986,6 +5266,13 @@ export class AppComponent implements DoCheck {
   regulatoryEvidenceSaving = false;
   regulatoryEvidences: RegulatoryEvidenceRecord[] = [];
   selectedSafetySiteId = "all";
+  selectedDashboardActionModule: DashboardActionModuleFilter = "all";
+  betaFeedbackCategory: BetaFeedbackCategory = "improvement";
+  betaFeedbackArea: BetaFeedbackArea = "cockpit";
+  betaFeedbackMessageText = "";
+  betaFeedbackNotice = "";
+  betaFeedbackError = "";
+  betaFeedbackCopyBusy = false;
   profileForm = {
     name: "",
     legalName: "",
@@ -3138,19 +5425,81 @@ export class AppComponent implements DoCheck {
     documentType: "attestation",
     notes: ""
   };
+  @ViewChild("homePageTemplate") private homePageTemplateRef?: TemplateRef<unknown>;
+  @ViewChild("reglementationPageTemplate") private reglementationPageTemplateRef?: TemplateRef<unknown>;
+  @ViewChild("chantierPageTemplate") private chantierPageTemplateRef?: TemplateRef<unknown>;
+  @ViewChild("facturationPageTemplate") private facturationPageTemplateRef?: TemplateRef<unknown>;
+  @ViewChild("coordinationPageTemplate") private coordinationPageTemplateRef?: TemplateRef<unknown>;
 
   constructor() {
-    if (this.accessToken) {
-      void this.refreshSession(this.selectedOrganizationId);
+    this.router.events.subscribe((event) => {
+      if (event instanceof NavigationCancel) {
+        console.warn("[routing] navigation cancelled.", {
+          url: event.url,
+          reason: event.reason,
+        });
+      }
+      if (event instanceof NavigationError) {
+        console.error("[routing] navigation error.", {
+          url: event.url,
+          error: event.error,
+        });
+      }
+      if (event instanceof NavigationEnd) {
+        void this.handleRouteChange();
+      }
+    });
+
+    void this.handleRouteChange();
+  }
+
+  getWorkspaceTemplate(name: WorkspaceTemplateName): TemplateRef<unknown> | null {
+    switch (name) {
+      case "home":
+        return this.homePageTemplateRef ?? null;
+      case "reglementation":
+        return this.reglementationPageTemplateRef ?? null;
+      case "chantier":
+        return this.chantierPageTemplateRef ?? null;
+      case "facturation":
+        return this.facturationPageTemplateRef ?? null;
+      case "coordination":
+        return this.coordinationPageTemplateRef ?? null;
+      default:
+        return null;
     }
   }
 
   ngDoCheck(): void {
+    if (AppComponent.DISABLE_DO_CHECK_PERSISTENCE) {
+      return;
+    }
     this.persistBillingDraftsIfNeeded();
   }
 
   get currentMembership(): MembershipAccess | null {
     return this.session?.current_membership ?? null;
+  }
+
+  get activeSessionModules(): ModuleCode[] {
+    const membership = this.currentMembership;
+
+    if (!membership) {
+      return [];
+    }
+
+    const modulesFromEnabledList = membership.enabled_modules ?? [];
+    const modulesFromRecords =
+      membership.modules
+        ?.filter((module) => module.is_enabled)
+        .map((module) => module.module_code)
+      ?? [];
+
+    return Array.from(new Set([...modulesFromEnabledList, ...modulesFromRecords]));
+  }
+
+  get shouldRenderLoginScreen(): boolean {
+    return this.isLoginRoutePath(this.router.url.split("#")[0] || "/login");
   }
 
   get canManageModules(): boolean {
@@ -3165,12 +5514,156 @@ export class AppComponent implements DoCheck {
     return this.currentMembership?.permissions.includes("organization:read") ?? false;
   }
 
+  get canReadUsers(): boolean {
+    return this.currentMembership?.permissions.includes("users:read") ?? false;
+  }
+
+  get desktopNavigationItems(): Array<{ route: string; label: string; tone: CfmTone }> {
+    const items: Array<{ route: string; label: string; tone: CfmTone }> = [
+      { route: "/app/home", label: "Cockpit", tone: "calm" },
+    ];
+
+    if (this.isReglementationEnabled) {
+      items.push({ route: "/app/reglementation", label: "Réglementation", tone: "progress" });
+    }
+
+    if (this.isChantierEnabled) {
+      items.push({ route: "/app/chantier", label: "Chantier", tone: "calm" });
+      items.push({ route: "/app/chantier/documents", label: "Documents", tone: "neutral" });
+      items.push({ route: "/app/chantier/coordination", label: "Coordination", tone: "progress" });
+    }
+
+    if (this.isFacturationEnabled) {
+      items.push({ route: "/app/facturation", label: "Facturation", tone: "calm" });
+    }
+
+    return items;
+  }
+
   get isReglementationEnabled(): boolean {
-    return this.currentMembership?.enabled_modules.includes("reglementation") ?? false;
+    return this.activeSessionModules.includes("reglementation");
   }
 
   get isFacturationEnabled(): boolean {
-    return this.currentMembership?.enabled_modules.includes("facturation") ?? false;
+    return this.activeSessionModules.includes("facturation");
+  }
+
+  get isChantierEnabled(): boolean {
+    return this.activeSessionModules.includes("chantier");
+  }
+
+  get homeUsedModuleCodes(): ModuleCode[] {
+    return this.activeSessionModules.filter((moduleCode) =>
+      moduleCode === "reglementation" || moduleCode === "chantier" || moduleCode === "facturation"
+    );
+  }
+
+  get isWorkspaceHydratedForCurrentOrganization(): boolean {
+    return Boolean(
+      this.selectedOrganizationId
+      && this.workspaceHydratedOrganizationId === this.selectedOrganizationId
+    );
+  }
+
+  get isReglementationDataPending(): boolean {
+    return this.isModuleDataPending("reglementation");
+  }
+
+  get isReglementationDataDelayed(): boolean {
+    return Boolean(
+      this.isReglementationEnabled
+      && this.regulatoryWorkspaceNotice
+      && !this.regulatoryProfile
+      && this.buildingSafetyItems.length === 0
+      && this.buildingSafetyAlerts.length === 0
+      && this.duerpEntries.length === 0
+      && this.regulatoryEvidences.length === 0
+    );
+  }
+
+  get regulatoryWorkspaceNotice(): string | null {
+    if (!this.isReglementationEnabled) {
+      return null;
+    }
+
+    const messages = AppComponent.REGULATORY_WORKSPACE_SEGMENT_LABELS
+      .map((label) => this.workspaceSegmentIssues[label])
+      .filter((message): message is string => Boolean(message));
+
+    if (messages.length === 0) {
+      return null;
+    }
+
+    return "Les données réglementaires mettent plus de temps à remonter. Le reste du cockpit reste disponible.";
+  }
+
+  get isFacturationDataPending(): boolean {
+    return this.isModuleDataPending("facturation");
+  }
+
+  get isChantierDataPending(): boolean {
+    return this.isModuleDataPending("chantier");
+  }
+
+  getModuleNavigationLabel(moduleCode: ModuleCode): string {
+    switch (moduleCode) {
+      case "reglementation":
+        return "Réglementation";
+      case "chantier":
+        return "Chantier";
+      case "facturation":
+        return "Facturation";
+    }
+  }
+
+  get hasWorkspaceContent(): boolean {
+    return Boolean(
+      this.cockpitSummary
+      || this.organizationProfile
+      || this.organizationSites.length > 0
+      || this.regulatoryProfile
+      || this.billingCustomers.length > 0
+      || this.billingWorksites.length > 0
+      || this.worksiteDocuments.length > 0
+      || this.worksiteProofs.length > 0
+      || this.worksiteSignatures.length > 0
+      || this.quotes.length > 0
+      || this.invoices.length > 0
+      || this.buildingSafetyItems.length > 0
+      || this.buildingSafetyAlerts.length > 0
+      || this.duerpEntries.length > 0
+      || this.regulatoryEvidences.length > 0
+    );
+  }
+
+  get shouldShowWorkspaceContent(): boolean {
+    return !this.organizationWorkspaceLoading || this.hasWorkspaceContent;
+  }
+
+  get shouldShowInitialWorkspaceLoading(): boolean {
+    return this.organizationWorkspaceLoading && !this.hasWorkspaceContent;
+  }
+
+  get isWorkspaceRefreshing(): boolean {
+    return this.organizationWorkspaceLoading && this.hasWorkspaceContent;
+  }
+
+  get hasBetaFeedbackDraft(): boolean {
+    return this.betaFeedbackMessageText.trim().length > 0;
+  }
+
+  get canCopyBetaFeedback(): boolean {
+    return this.hasBetaFeedbackDraft;
+  }
+
+  get betaFeedbackPreviewText(): string {
+    return [
+      "Retour beta Conforméo",
+      `Type : ${this.getBetaFeedbackCategoryLabel(this.betaFeedbackCategory)}`,
+      `Zone : ${this.getBetaFeedbackAreaLabel(this.betaFeedbackArea)}`,
+      "",
+      this.betaFeedbackMessageText.trim(),
+    ].join("\n");
   }
 
   get isOnboardingPending(): boolean {
@@ -3229,6 +5722,1334 @@ export class AppComponent implements DoCheck {
     }
 
     return `${total} ${label}`;
+  }
+
+  get activeWorksitePreventionPlanPreview(): WorksitePreventionPlanPreview | null {
+    if (!this.worksitePreventionPlanEditingId) {
+      return null;
+    }
+
+    const worksite = this.billingWorksites.find((entry) => entry.id === this.worksitePreventionPlanEditingId);
+    if (!worksite) {
+      return null;
+    }
+
+    return this.buildWorksitePreventionPlanPreview(worksite);
+  }
+
+  getWorksiteAssigneeOptionLabel(assignee: WorksiteAssigneeRecord): string {
+    return `${assignee.display_name} · ${assignee.role_code}`;
+  }
+
+  toggleWorksiteCoordination(worksiteId: string): void {
+    this.selectedWorksiteCoordinationId =
+      this.selectedWorksiteCoordinationId === worksiteId ? null : worksiteId;
+  }
+
+  getWorksiteCoordinationDraft(worksiteId: string): CoordinationDraftForm {
+    const existingDraft = this.worksiteCoordinationDrafts[worksiteId];
+    if (existingDraft) {
+      return existingDraft;
+    }
+
+    const worksite = this.billingWorksites.find((entry) => entry.id === worksiteId);
+    const draft = this.buildCoordinationDraft(worksite?.coordination ?? null);
+    this.worksiteCoordinationDrafts = {
+      ...this.worksiteCoordinationDrafts,
+      [worksiteId]: draft,
+    };
+    return draft;
+  }
+
+  getWorksiteDocumentCoordinationDraft(documentId: string): CoordinationDraftForm {
+    const existingDraft = this.worksiteDocumentCoordinationDrafts[documentId];
+    if (existingDraft) {
+      return existingDraft;
+    }
+
+    const document = this.worksiteDocuments.find((entry) => entry.id === documentId);
+    const draft = this.buildCoordinationDraft(document?.coordination ?? null);
+    this.worksiteDocumentCoordinationDrafts = {
+      ...this.worksiteDocumentCoordinationDrafts,
+      [documentId]: draft,
+    };
+    return draft;
+  }
+
+  updateWorksiteCoordinationDraft(
+    worksiteId: string,
+    patch: Partial<CoordinationDraftForm>,
+  ): void {
+    this.worksiteCoordinationDrafts = {
+      ...this.worksiteCoordinationDrafts,
+      [worksiteId]: {
+        ...this.getWorksiteCoordinationDraft(worksiteId),
+        ...patch,
+      },
+    };
+  }
+
+  updateWorksiteDocumentCoordinationDraft(
+    documentId: string,
+    patch: Partial<CoordinationDraftForm>,
+  ): void {
+    this.worksiteDocumentCoordinationDrafts = {
+      ...this.worksiteDocumentCoordinationDrafts,
+      [documentId]: {
+        ...this.getWorksiteDocumentCoordinationDraft(documentId),
+        ...patch,
+      },
+    };
+  }
+
+  private buildCoordinationDraft(coordination: WorksiteCoordinationRecord | null): CoordinationDraftForm {
+    return {
+      status: coordination?.status ?? "todo",
+      assigneeUserId: coordination?.assignee_user_id ?? "",
+      commentText: coordination?.comment_text ?? "",
+    };
+  }
+
+  private buildDashboardCoordinationState(coordination: WorksiteCoordinationRecord): DashboardCoordinationState {
+    const commentText = coordination.comment_text?.trim() ? coordination.comment_text.trim() : null;
+    const updatedAtLabel = this.formatCompactDate(coordination.updated_at);
+    return {
+      status: coordination.status,
+      statusLabel: this.getWorksiteCoordinationStatusLabel(coordination.status),
+      statusTone: this.getWorksiteCoordinationStatusTone(coordination.status),
+      assigneeUserId: coordination.assignee_user_id,
+      assigneeDisplayName: coordination.assignee_display_name,
+      assigneeLabel: coordination.assignee_display_name ?? "Non affecté",
+      commentText,
+      commentSummary:
+        commentText
+          ? `Commentaire : ${commentText}`
+          : "Commentaire : aucun commentaire simple",
+      updatedAtLabel,
+    };
+  }
+
+  private mapDashboardWorksiteDocumentItem(document: WorksiteDocumentRecord): DashboardWorksiteDocumentItem {
+    return {
+      id: document.id,
+      title: document.document_type_label,
+      documentType: document.document_type,
+      fileName: document.file_name,
+      worksiteId: document.worksite_id,
+      worksiteName: document.worksite_name,
+      lifecycleStatus: document.lifecycle_status,
+      lifecycleStatusLabel: this.getWorksiteDocumentLifecycleStatusLabel(document.lifecycle_status),
+      lifecycleStatusTone: this.getWorksiteDocumentLifecycleStatusTone(document.lifecycle_status),
+      technicalStatusLabel: this.getWorksiteDocumentTechnicalStatusLabel(document.status),
+      technicalStatusTone: this.getWorksiteDocumentTechnicalStatusTone(document.status),
+      typeLabel: document.document_type_label,
+      proofCount: document.linked_proofs.length,
+      proofCountLabel: this.getWorksiteDocumentProofCountLabel(document.linked_proofs.length),
+      signatureStatusLabel: this.getWorksiteDocumentSignatureStatusLabel(document.linked_signature_id),
+      signatureStatusTone: this.getWorksiteDocumentSignatureStatusTone(document.linked_signature_id),
+      linkedSignature: this.mapLinkedWorksiteSignatureItem(document),
+      linkedSignatureId: document.linked_signature_id,
+      linkedSignatureLabel: document.linked_signature_label,
+      linkedSignatureDetail: this.formatWorksiteLinkedSignatureDetail(document),
+      linkedProofs: this.mapLinkedWorksiteProofItems(document),
+      linkedProofsSummary: this.formatWorksiteLinkedProofsSummary(document),
+      hasStoredFile: document.has_stored_file,
+      fileAvailabilityLabel: this.getWorksiteDocumentFileAvailabilityLabel(document),
+      fileAvailabilityTone: this.getWorksiteDocumentFileAvailabilityTone(document),
+      fileSizeLabel: this.formatFileSize(document.size_bytes),
+      uploadedAtValue: document.uploaded_at,
+      uploadedAtLabel: this.formatCompactDate(document.uploaded_at),
+      notes: document.notes,
+      coordination: this.buildDashboardCoordinationState(document.coordination),
+    };
+  }
+
+  private matchesCoordinationFilters(coordination: DashboardCoordinationState): boolean {
+    return this.matchesCoordinationStatusFilter(coordination) && this.matchesCoordinationAssigneeFilter(coordination);
+  }
+
+  private matchesCoordinationStatusFilter(coordination: DashboardCoordinationState): boolean {
+    return this.selectedCoordinationStatusFilter === "all"
+      ? true
+      : coordination.status === this.selectedCoordinationStatusFilter;
+  }
+
+  private matchesCoordinationAssigneeFilter(coordination: DashboardCoordinationState): boolean {
+    if (this.selectedCoordinationAssigneeFilter === "all") {
+      return true;
+    }
+    if (this.selectedCoordinationAssigneeFilter === "unassigned") {
+      return !coordination.assigneeUserId;
+    }
+    return coordination.assigneeUserId === this.selectedCoordinationAssigneeFilter;
+  }
+
+  private isCoordinationPending(coordination: DashboardCoordinationState): boolean {
+    return coordination.status === "todo" || coordination.status === "in_progress";
+  }
+
+  get worksiteDocumentFilterOptions(): WorksiteApiSummary[] {
+    const worksiteIds = new Set(this.worksiteDocuments.map((document) => document.worksite_id));
+    return this.billingWorksites
+      .filter((worksite) => worksiteIds.has(worksite.id))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  get worksiteDocumentTypeFilterOptions(): Array<{ value: string; label: string }> {
+    const byType = new Map<string, string>();
+    for (const document of this.worksiteDocuments) {
+      if (!byType.has(document.document_type)) {
+        byType.set(document.document_type, document.document_type_label);
+      }
+    }
+    return Array.from(byType.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }
+
+  get filteredWorksiteDocumentItems(): DashboardWorksiteDocumentItem[] {
+    const documents = this.worksiteDocuments
+      .filter((document) =>
+        this.selectedWorksiteDocumentFilterId === "all"
+          ? true
+          : document.worksite_id === this.selectedWorksiteDocumentFilterId
+      )
+      .filter((document) =>
+        this.selectedWorksiteDocumentTypeFilter === "all"
+          ? true
+          : document.document_type === this.selectedWorksiteDocumentTypeFilter
+      )
+      .filter((document) =>
+        this.selectedWorksiteDocumentLifecycleFilter === "all"
+          ? true
+          : document.lifecycle_status === this.selectedWorksiteDocumentLifecycleFilter
+      );
+
+    return documents
+      .map((document) => this.mapDashboardWorksiteDocumentItem(document))
+      .filter((document) => this.matchesCoordinationFilters(document.coordination))
+      .sort((left, right) => (right.uploadedAtValue ?? "").localeCompare(left.uploadedAtValue ?? ""));
+  }
+
+  get filteredDashboardWorksiteOverviewItems(): DashboardWorksiteOverviewItem[] {
+    return this.dashboardWorksiteOverviewItems.filter((item) => this.matchesCoordinationFilters(item.coordination));
+  }
+
+  get worksiteDocumentCountLabel(): string {
+    const total = this.worksiteDocuments.length;
+    const visible = this.filteredWorksiteDocumentItems.length;
+    const label = total > 1 ? "documents" : "document";
+
+    if (
+      this.selectedWorksiteDocumentFilterId !== "all"
+      || this.selectedWorksiteDocumentTypeFilter !== "all"
+      || this.selectedWorksiteDocumentLifecycleFilter !== "all"
+      || this.hasActiveCoordinationFilters
+    ) {
+      return `${visible} sur ${total} ${label}`;
+    }
+
+    return `${total} ${label}`;
+  }
+
+  get worksiteOverviewCountLabel(): string {
+    const total = this.dashboardWorksiteOverviewItems.length;
+    const visible = this.filteredDashboardWorksiteOverviewItems.length;
+    const label = total > 1 ? "chantiers" : "chantier";
+
+    if (this.isChantierDataPending && total === 0) {
+      return "Lecture chantier en préparation";
+    }
+
+    if (this.hasActiveCoordinationFilters) {
+      return `${visible} sur ${total} ${label}`;
+    }
+
+    return `${total} ${label}`;
+  }
+
+  get customerOverviewCountLabel(): string {
+    const count = this.dashboardCustomerOverviewItems.length;
+    const label = count > 1 ? "clients" : "client";
+
+    if (this.isFacturationDataPending && count === 0) {
+      return "Lecture client en préparation";
+    }
+
+    return `${count} ${label}`;
+  }
+
+  get hasActiveCoordinationFilters(): boolean {
+    return this.selectedCoordinationStatusFilter !== "all" || this.selectedCoordinationAssigneeFilter !== "all";
+  }
+
+  get canResetWorksitePreventionPlanToInitial(): boolean {
+    if (!this.worksitePreventionPlanInitialForm) {
+      return false;
+    }
+
+    return JSON.stringify(this.worksitePreventionPlanForm) !== JSON.stringify(this.worksitePreventionPlanInitialForm);
+  }
+
+  getWorksiteSignatureOptions(worksiteId: string): WorksiteSignatureRecord[] {
+    return this.worksiteSignatures
+      .filter((signature) => signature.worksite_id === worksiteId)
+      .sort((left, right) => (right.uploaded_at ?? "").localeCompare(left.uploaded_at ?? ""));
+  }
+
+  getWorksiteSignatureOptionLabel(signature: WorksiteSignatureRecord): string {
+    const uploadedLabel = this.formatCompactDate(signature.uploaded_at);
+    return uploadedLabel ? `${signature.file_name} · ${uploadedLabel}` : signature.file_name;
+  }
+
+  getWorksiteDocumentActionLabel(document: DashboardWorksiteDocumentItem): string {
+    return this.isWorksitePreventionPlanDocumentType(document.documentType)
+      ? "Télécharger"
+      : "Télécharger";
+  }
+
+  get hasActiveWorksiteDocumentFilters(): boolean {
+    return (
+      this.selectedWorksiteDocumentFilterId !== "all"
+      || this.selectedWorksiteDocumentTypeFilter !== "all"
+      || this.selectedWorksiteDocumentLifecycleFilter !== "all"
+      || this.hasActiveCoordinationFilters
+    );
+  }
+
+  get coordinationTodoItems(): DashboardCoordinationTodoItem[] {
+    const worksiteItems = this.filteredDashboardWorksiteOverviewItems
+      .filter((item) => this.isCoordinationPending(item.coordination))
+      .map((item) => ({
+        id: `worksite-${item.id}`,
+        kind: "worksite" as const,
+        kindLabel: "Chantier",
+        kindTone: "calm" as CfmTone,
+        title: item.name,
+        description: item.coordination.commentText ?? item.taskSummary,
+        context: `Affectation : ${item.coordination.assigneeLabel}`,
+        status: item.coordination.status,
+        statusLabel: item.coordination.statusLabel,
+        statusTone: item.coordination.statusTone,
+        worksiteId: item.id,
+        documentId: null,
+      }));
+
+    const documentItems = this.worksiteDocuments
+      .map((document) => this.mapDashboardWorksiteDocumentItem(document))
+      .filter((document) => this.matchesCoordinationFilters(document.coordination))
+      .filter((document) => this.isCoordinationPending(document.coordination))
+      .map((document) => ({
+        id: `document-${document.id}`,
+        kind: "document" as const,
+        kindLabel: "Document",
+        kindTone: "neutral" as CfmTone,
+        title: `${document.title} · ${document.worksiteName}`,
+        description:
+          document.coordination.commentText
+          ?? `${document.typeLabel} encore en préparation ou en suivi simple.`,
+        context: `Affectation : ${document.coordination.assigneeLabel}`,
+        status: document.coordination.status,
+        statusLabel: document.coordination.statusLabel,
+        statusTone: document.coordination.statusTone,
+        worksiteId: document.worksiteId,
+        documentId: document.id,
+      }));
+
+    return [...worksiteItems, ...documentItems].sort(
+      (left, right) =>
+        this.getCoordinationStatusRank(left.status) - this.getCoordinationStatusRank(right.status)
+        || left.title.localeCompare(right.title)
+    );
+  }
+
+  get coordinationTodoCountLabel(): string {
+    const count = this.coordinationTodoItems.length;
+
+    if (this.isChantierDataPending && count === 0) {
+      return "Coordination en préparation";
+    }
+
+    return `${count} élément${count > 1 ? "s" : ""} à traiter`;
+  }
+
+  isWorksiteDocumentDownloadBusy(document: DashboardWorksiteDocumentItem): boolean {
+    return this.worksiteDocumentDownloadBusyId === document.id;
+  }
+
+  canAdjustWorksiteDocument(document: DashboardWorksiteDocumentItem): boolean {
+    return this.isWorksitePreventionPlanDocumentType(document.documentType) && this.canReadOrganization;
+  }
+
+  hasWorksiteDocumentLinkedItems(document: DashboardWorksiteDocumentItem): boolean {
+    return document.linkedSignature !== null || document.linkedProofs.length > 0;
+  }
+
+  getWorksiteDocumentProofCountLabel(count: number): string {
+    return count > 0
+      ? `${count} preuve${count > 1 ? "s" : ""} liée${count > 1 ? "s" : ""}`
+      : "Aucune preuve liée";
+  }
+
+  getWorksiteDocumentFileAvailabilityLabel(document: Pick<WorksiteDocumentRecord, "has_stored_file">): string {
+    return document.has_stored_file ? "Fichier prêt" : "Fichier à stabiliser";
+  }
+
+  getWorksiteDocumentFileAvailabilityTone(document: Pick<WorksiteDocumentRecord, "has_stored_file">): CfmTone {
+    return document.has_stored_file ? "success" : "progress";
+  }
+
+  formatFileSize(sizeBytes: number | null): string | null {
+    if (!sizeBytes || sizeBytes <= 0) {
+      return null;
+    }
+    if (sizeBytes >= 1024 * 1024) {
+      return `${(sizeBytes / (1024 * 1024)).toFixed(1).replace(".", ",")} Mo`;
+    }
+    return `${Math.max(1, Math.round(sizeBytes / 1024))} Ko`;
+  }
+
+  getWorksiteProofOptions(worksiteId: string): WorksiteProofRecord[] {
+    return this.worksiteProofs
+      .filter((proof) => proof.worksite_id === worksiteId)
+      .sort((left, right) => (right.uploaded_at ?? "").localeCompare(left.uploaded_at ?? ""));
+  }
+
+  getWorksiteProofOptionLabel(proof: WorksiteProofRecord): string {
+    const uploadedLabel = this.formatCompactDate(proof.uploaded_at);
+    return uploadedLabel ? `${proof.file_name} · ${uploadedLabel}` : proof.file_name;
+  }
+
+  resetWorksiteDocumentFilters(): void {
+    this.selectedWorksiteDocumentFilterId = "all";
+    this.selectedWorksiteDocumentTypeFilter = "all";
+    this.selectedWorksiteDocumentLifecycleFilter = "all";
+    this.selectedWorksiteDocumentDetailId = null;
+    this.resetCoordinationFilters();
+  }
+
+  resetCoordinationFilters(): void {
+    this.selectedCoordinationStatusFilter = "all";
+    this.selectedCoordinationAssigneeFilter = "all";
+  }
+
+  focusWorksiteDocuments(worksiteId: string, documentType: string = "all"): void {
+    this.selectedWorksiteDocumentFilterId = worksiteId;
+    this.selectedWorksiteDocumentTypeFilter = documentType;
+    this.selectedWorksiteDocumentLifecycleFilter = "all";
+    this.selectedWorksiteDocumentDetailId = null;
+    this.feedbackMessage = "Documents chantier filtrés sur la zone utile.";
+    void this.navigateToWorkspaceRoute("/app/chantier/documents", "worksite-documents-section");
+  }
+
+  openCoordinationTodoItem(item: DashboardCoordinationTodoItem): void {
+    if (item.kind === "worksite") {
+      this.selectedWorksiteCoordinationId = item.worksiteId;
+      this.feedbackMessage = "Chantier ouvert sur la coordination utile.";
+      void this.navigateToWorkspaceRoute("/app/chantier", "worksite-overview-section");
+      return;
+    }
+
+    if (item.documentId) {
+      this.selectedWorksiteDocumentFilterId = item.worksiteId;
+      this.selectedWorksiteDocumentTypeFilter = "all";
+      this.selectedWorksiteDocumentLifecycleFilter = "all";
+      this.selectedWorksiteDocumentDetailId = item.documentId;
+      this.feedbackMessage = "Document chantier ouvert sur la zone utile.";
+      void this.navigateToWorkspaceRoute("/app/chantier/documents", "worksite-documents-section");
+    }
+  }
+
+  isWorksiteProofLinked(document: DashboardWorksiteDocumentItem, proofId: string): boolean {
+    return document.linkedProofs.some((proof) => proof.id === proofId);
+  }
+
+  get localDashboardKpis(): DashboardKpiCard[] {
+    const cards: DashboardKpiCard[] = [];
+
+    if (this.isFacturationEnabled) {
+      const facturationPending = this.isFacturationDataPending && this.quotes.length === 0 && this.invoices.length === 0;
+      cards.push({
+        id: "quotes-in-progress",
+        label: "Devis en cours",
+        value: facturationPending ? "Actif" : String(this.activeQuotesCount),
+        detail:
+          facturationPending
+            ? "Le module Facturation est actif. Les premiers repères arrivent."
+            : this.activeQuotesCount > 0
+            ? "Brouillons et devis envoyés à suivre."
+            : "Aucun devis en cours.",
+        statusLabel:
+          facturationPending
+            ? "Préparation"
+            : this.activeQuotesCount > 0
+              ? "À suivre"
+              : "À jour",
+        tone:
+          facturationPending
+            ? "calm"
+            : this.activeQuotesCount > 0
+              ? "progress"
+              : "success",
+      });
+      cards.push({
+        id: "invoices-pending",
+        label: "Factures en attente",
+        value: facturationPending ? "Actif" : String(this.pendingInvoicesCount),
+        detail:
+          facturationPending
+            ? "Les premières factures suivies apparaîtront après l’hydratation du workspace."
+            : this.pendingInvoicesCount > 0
+            ? this.overdueInvoicesCount > 0
+              ? `${this.overdueInvoicesCount} en retard.`
+              : "Reste à encaisser ou à suivre."
+            : "Aucune facture en attente.",
+        statusLabel:
+          facturationPending
+            ? "Préparation"
+            : this.overdueInvoicesCount > 0
+            ? "En retard"
+            : this.pendingInvoicesCount > 0
+              ? "En attente"
+              : "À jour",
+        tone:
+          facturationPending
+            ? "calm"
+            : this.overdueInvoicesCount > 0
+            ? "warning"
+            : this.pendingInvoicesCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    if (this.isReglementationEnabled) {
+      const regulationPending =
+        this.isReglementationDataPending
+        && !this.regulatoryProfile
+        && this.buildingSafetyItems.length === 0
+        && this.duerpEntries.length === 0;
+      const regulationDelayed = !regulationPending && this.isReglementationDataDelayed;
+      cards.push({
+        id: "regulation-to-review",
+        label: "Réglementaire à vérifier",
+        value: regulationPending ? "Actif" : regulationDelayed ? "Partiel" : String(this.regulatoryActionCount),
+        detail:
+          regulationPending
+            ? "Le module Réglementation est actif. Les premiers repères arrivent."
+            : regulationDelayed
+            ? "Les données réglementaires mettent plus de temps à remonter. Le reste du cockpit reste disponible."
+            : this.regulatoryActionCount > 0
+            ? "Obligations ou contrôles à revoir."
+            : "Aucun point réglementaire prioritaire.",
+        statusLabel:
+          regulationPending
+            ? "Préparation"
+            : regulationDelayed
+            ? "Remontée lente"
+            : this.globalBuildingSafetyOverdueCount > 0 || this.overdueRegulatoryObligationCount > 0
+            ? "À traiter"
+            : this.regulatoryActionCount > 0
+              ? "À vérifier"
+              : "À jour",
+        tone:
+          regulationPending
+            ? "calm"
+            : regulationDelayed
+            ? "progress"
+            : this.globalBuildingSafetyOverdueCount > 0 || this.overdueRegulatoryObligationCount > 0
+            ? "warning"
+            : this.regulatoryActionCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    if (this.isChantierEnabled) {
+      const chantierPending =
+        this.isChantierDataPending
+        && this.billingWorksites.length === 0
+        && this.worksiteDocuments.length === 0
+        && this.worksiteProofs.length === 0
+        && this.worksiteSignatures.length === 0;
+      cards.push({
+        id: "worksites-needing-action",
+        label: "Chantiers nécessitant une action",
+        value: chantierPending ? "Actif" : String(this.worksitesNeedingActionCount),
+        detail:
+          chantierPending
+            ? "Le module Chantier est actif. Les premiers repères arrivent."
+            : this.worksitesNeedingActionCount > 0
+            ? "Bloqués ou à préparer."
+            : "Aucun chantier prioritaire.",
+        statusLabel:
+          chantierPending
+            ? "Préparation"
+            : this.blockedWorksitesCount > 0
+            ? "Bloqués"
+            : this.worksitesNeedingActionCount > 0
+              ? "À préparer"
+              : "À jour",
+        tone:
+          chantierPending
+            ? "calm"
+            : this.blockedWorksitesCount > 0
+            ? "warning"
+            : this.worksitesNeedingActionCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    return cards;
+  }
+
+  get localDashboardAlerts(): DashboardAlertItem[] {
+    const alerts: DashboardAlertItem[] = [];
+
+    if (this.isFacturationEnabled && this.overdueInvoicesCount > 0) {
+      alerts.push({
+        id: "billing-overdue-invoices",
+        title: "Factures en retard",
+        description: `${this.overdueInvoicesCount} facture${this.overdueInvoicesCount > 1 ? "s dépassent" : " dépasse"} l'échéance et demande${this.overdueInvoicesCount > 1 ? "nt" : ""} un suivi.`,
+        moduleLabel: "Facturation",
+        tone: "warning",
+        priority: 1,
+      });
+    }
+
+    if (this.isFacturationEnabled && this.quotesToFollowUpCount > 0) {
+      alerts.push({
+        id: "billing-quotes-follow-up",
+        title: "Devis à relancer",
+        description: `${this.quotesToFollowUpCount} devis ${this.quotesToFollowUpCount > 1 ? "sont marqués" : "est marqué"} à relancer.`,
+        moduleLabel: "Facturation",
+        tone: "progress",
+        priority: 2,
+      });
+    }
+
+    if (this.isReglementationEnabled && this.globalBuildingSafetyOverdueCount > 0) {
+      alerts.push({
+        id: "regulation-building-safety-overdue",
+        title: "Sécurité bâtiment à traiter",
+        description: `${this.globalBuildingSafetyOverdueCount} élément${this.globalBuildingSafetyOverdueCount > 1 ? "s" : ""} sécurité ${this.globalBuildingSafetyOverdueCount > 1 ? "sont en retard" : "est en retard"} de contrôle.`,
+        moduleLabel: "Réglementation",
+        tone: "warning",
+        priority: 1,
+      });
+    }
+
+    if (this.isReglementationEnabled && this.regulatoryObligationsToVerifyCount > 0) {
+      alerts.push({
+        id: "regulation-obligations-to-verify",
+        title: "Obligations à vérifier",
+        description: `${this.regulatoryObligationsToVerifyCount} obligation${this.regulatoryObligationsToVerifyCount > 1 ? "s demandent" : " demande"} une vérification simple.`,
+        moduleLabel: "Réglementation",
+        tone: "progress",
+        priority: 2,
+      });
+    }
+
+    if (this.isChantierEnabled && this.blockedWorksitesCount > 0) {
+      alerts.push({
+        id: "worksites-blocked",
+        title: "Chantiers bloqués",
+        description: `${this.blockedWorksitesCount} chantier${this.blockedWorksitesCount > 1 ? "s sont" : " est"} bloqué${this.blockedWorksitesCount > 1 ? "s" : ""} et nécessite${this.blockedWorksitesCount > 1 ? "nt" : ""} une action.`,
+        moduleLabel: "Chantier",
+        tone: "warning",
+        priority: 1,
+      });
+    } else if (this.isChantierEnabled && this.plannedWorksitesCount > 0) {
+      alerts.push({
+        id: "worksites-planned",
+        title: "Chantiers à préparer",
+        description: `${this.plannedWorksitesCount} chantier${this.plannedWorksitesCount > 1 ? "s sont" : " est"} planifié${this.plannedWorksitesCount > 1 ? "s" : ""} et mérite${this.plannedWorksitesCount > 1 ? "nt" : ""} une préparation simple.`,
+        moduleLabel: "Chantier",
+        tone: "calm",
+        priority: 3,
+      });
+    }
+
+    return alerts
+      .sort((left, right) => left.priority - right.priority || left.title.localeCompare(right.title))
+      .slice(0, 6);
+  }
+
+  get dashboardKpis(): DashboardKpiCard[] {
+    if (!this.cockpitSummary || this.cockpitSummary.kpis.length === 0) {
+      return this.localDashboardKpis;
+    }
+
+    return this.cockpitSummary.kpis.map((kpi) => ({
+      id: kpi.id,
+      label: kpi.label,
+      value: kpi.value,
+      detail: kpi.detail,
+      statusLabel: kpi.status_label,
+      tone: this.mapCockpitTone(kpi.tone),
+    }));
+  }
+
+  get dashboardAlerts(): DashboardAlertItem[] {
+    if (!this.cockpitSummary || this.cockpitSummary.alerts.length === 0) {
+      return this.localDashboardAlerts;
+    }
+
+    return this.cockpitSummary.alerts.map((alert) => ({
+      id: alert.id,
+      title: alert.title,
+      description: alert.description,
+      moduleLabel: alert.module_label,
+      tone: this.mapCockpitTone(alert.tone),
+      priority: alert.priority,
+    }));
+  }
+
+  get dashboardEnterpriseOverviewCards(): DashboardPerspectiveCard[] {
+    if (!this.cockpitSummary || this.cockpitSummary.module_cards.length === 0) {
+      return this.localDashboardEnterpriseOverviewCards;
+    }
+
+    return this.cockpitSummary.module_cards.map((card) => ({
+      id: card.id,
+      label: card.label,
+      headline: card.headline,
+      detail: card.detail,
+      highlights: card.highlights.map((highlight) => ({
+        id: highlight.id,
+        label: highlight.label,
+        value: highlight.value,
+      })),
+      statusLabel: card.status_label,
+      tone: this.mapCockpitTone(card.tone),
+    }));
+  }
+
+  get dashboardActions(): DashboardActionItem[] {
+    const actions: DashboardActionItem[] = [];
+
+    if (this.isFacturationEnabled) {
+      for (const invoice of this.invoices) {
+        if (invoice.status === "overdue") {
+          actions.push({
+            id: `invoice-overdue-${invoice.id}`,
+            module: "facturation",
+            priority: "high",
+            title: `Traiter la facture ${invoice.number}`,
+            description: `${invoice.customer_name} • reste dû ${this.formatAmountCents(invoice.outstanding_amount_cents, invoice.currency)}.`,
+            context: invoice.worksite_name ? `Chantier lié : ${invoice.worksite_name}` : null,
+          });
+        } else if (invoice.outstanding_amount_cents > 0 && invoice.status === "issued") {
+          actions.push({
+            id: `invoice-issued-${invoice.id}`,
+            module: "facturation",
+            priority: invoice.follow_up_status === "to_follow_up" ? "medium" : "low",
+            title: `Suivre la facture ${invoice.number}`,
+            description:
+              invoice.follow_up_status === "to_follow_up"
+                ? "Une relance simple est déjà identifiée."
+                : `Paiement en attente de ${this.formatAmountCents(invoice.outstanding_amount_cents, invoice.currency)}.`,
+            context: invoice.worksite_name ? `Chantier lié : ${invoice.worksite_name}` : null,
+          });
+        }
+      }
+
+      for (const quote of this.quotes) {
+        if (quote.follow_up_status === "to_follow_up") {
+          actions.push({
+            id: `quote-follow-up-${quote.id}`,
+            module: "facturation",
+            priority: "medium",
+            title: `Relancer le devis ${quote.number}`,
+            description: `${quote.customer_name} attend un retour ou une prise de contact simple.`,
+            context: quote.worksite_name ? `Chantier lié : ${quote.worksite_name}` : null,
+          });
+        } else if (quote.status === "draft") {
+          actions.push({
+            id: `quote-draft-${quote.id}`,
+            module: "facturation",
+            priority: "low",
+            title: `Finaliser le devis ${quote.number}`,
+            description: "Le devis est encore en brouillon et peut être envoyé quand il est prêt.",
+            context: quote.worksite_name ? `Chantier lié : ${quote.worksite_name}` : null,
+          });
+        }
+      }
+    }
+
+    if (this.isReglementationEnabled) {
+      for (const alert of this.buildingSafetyAlerts) {
+        actions.push({
+          id: `building-safety-${alert.item_id}-${alert.alert_type}`,
+          module: "reglementation",
+          priority: alert.alert_type === "overdue" ? "high" : "medium",
+          title:
+            alert.alert_type === "overdue"
+              ? `Mettre à jour ${alert.item_name}`
+              : `Anticiper ${alert.item_name}`,
+          description: alert.message,
+          context: `Site : ${alert.site_name}`,
+        });
+      }
+
+      for (const obligation of this.regulatoryProfile?.applicable_obligations ?? []) {
+        if (obligation.status === "compliant") {
+          continue;
+        }
+
+        const priority: DashboardActionPriority =
+          obligation.status === "overdue"
+            ? "high"
+            : obligation.status === "to_verify"
+              ? "medium"
+              : "low";
+        const titlePrefix =
+          obligation.status === "overdue"
+            ? "Traiter"
+            : obligation.status === "to_verify"
+              ? "Vérifier"
+              : "Préparer";
+
+        actions.push({
+          id: `obligation-${obligation.id}`,
+          module: "reglementation",
+          priority,
+          title: `${titlePrefix} ${obligation.title}`,
+          description: obligation.reason_summary,
+          context: `Priorité ${this.getObligationPriorityLabel(obligation.priority).toLowerCase()}`,
+        });
+      }
+    }
+
+    if (this.isChantierEnabled) {
+      for (const worksite of this.billingWorksites) {
+        if (worksite.status === "blocked") {
+          actions.push({
+            id: `worksite-blocked-${worksite.id}`,
+            module: "chantier",
+            priority: "high",
+            title: `Débloquer le chantier ${worksite.name}`,
+            description: "Le chantier est actuellement bloqué et demande une action terrain.",
+            context: worksite.client_name ? `Client : ${worksite.client_name}` : null,
+          });
+        } else if (worksite.status === "planned") {
+          actions.push({
+            id: `worksite-planned-${worksite.id}`,
+            module: "chantier",
+            priority: "low",
+            title: `Préparer le chantier ${worksite.name}`,
+            description: "Le chantier est planifié et peut être préparé avant l’intervention.",
+            context: worksite.client_name ? `Client : ${worksite.client_name}` : null,
+          });
+        }
+      }
+    }
+
+    return actions.sort(
+      (left, right) =>
+        this.getDashboardActionPriorityRank(left.priority) - this.getDashboardActionPriorityRank(right.priority)
+        || this.getDashboardActionModuleLabel(left.module).localeCompare(this.getDashboardActionModuleLabel(right.module))
+        || left.title.localeCompare(right.title)
+    );
+  }
+
+  get filteredDashboardActions(): DashboardActionItem[] {
+    if (this.selectedDashboardActionModule === "all") {
+      return this.dashboardActions;
+    }
+    return this.dashboardActions.filter((action) => action.module === this.selectedDashboardActionModule);
+  }
+
+  get dashboardActionCountLabel(): string {
+    const visible = this.filteredDashboardActions.length;
+    const total = this.dashboardActions.length;
+    const actionLabel = visible > 1 ? "actions" : "action";
+
+    if (
+      total === 0
+      && (
+        this.homeUsedModuleCodes.some((moduleCode) => this.isModuleDataPending(moduleCode))
+        || this.isReglementationDataDelayed
+      )
+    ) {
+      return "Actions en préparation";
+    }
+
+    if (this.selectedDashboardActionModule === "all") {
+      return `${visible} ${actionLabel}`;
+    }
+
+    return `${visible} ${actionLabel} · ${this.getDashboardActionModuleLabel(this.selectedDashboardActionModule)}`;
+  }
+
+  get localDashboardEnterpriseOverviewCards(): DashboardPerspectiveCard[] {
+    const cards: DashboardPerspectiveCard[] = [];
+
+    if (this.isReglementationEnabled) {
+      const activeDuerpEntriesCount = this.activeDuerpEntries.length;
+      const regulationPending =
+        this.isReglementationDataPending
+        && !this.regulatoryProfile
+        && this.buildingSafetyItems.length === 0
+        && this.duerpEntries.length === 0;
+      const regulationDelayed = !regulationPending && this.isReglementationDataDelayed;
+      cards.push({
+        id: "enterprise-reglementation",
+        label: "Réglementation",
+        headline:
+          regulationPending
+            ? "Module actif"
+            : regulationDelayed
+            ? "Lecture partielle"
+            : this.regulatoryActionCount > 0
+            ? `${this.regulatoryActionCount} point${this.regulatoryActionCount > 1 ? "s" : ""} à revoir`
+            : "Lecture apaisée",
+        detail:
+          regulationPending
+            ? "Les premiers repères réglementaires arrivent. La session connaît déjà ce module."
+            : regulationDelayed
+            ? "Les données réglementaires mettent plus de temps à remonter. La lecture reste partielle sans bloquer le cockpit."
+            : this.regulatoryActionCount > 0
+            ? "Obligations, sécurité bâtiment et risques suivis ressortent dans une même lecture simple."
+            : "Le module reste lisible avec des repères courts sur les obligations et la prévention.",
+        highlights: [
+          {
+            id: "reglementation-obligations",
+            label: "Obligations",
+            value:
+              regulationPending
+                ? "Lecture en préparation"
+                : regulationDelayed
+                ? "Remontée plus lente"
+                : this.regulatoryObligationsToVerifyCount > 0 || this.overdueRegulatoryObligationCount > 0
+                ? `${this.regulatoryObligationsToVerifyCount} à vérifier${this.overdueRegulatoryObligationCount > 0 ? ` · ${this.overdueRegulatoryObligationCount} en retard` : ""}`
+                : "Aucune obligation à reprendre"
+          },
+          {
+            id: "reglementation-building-safety",
+            label: "Sécurité bâtiment",
+            value:
+              regulationPending
+                ? "Lecture en préparation"
+                : regulationDelayed
+                ? "Remontée plus lente"
+                : this.buildingSafetyAlerts.length > 0 || this.globalBuildingSafetyOverdueCount > 0
+                ? `${this.buildingSafetyAlerts.length} alerte${this.buildingSafetyAlerts.length > 1 ? "s" : ""}${this.globalBuildingSafetyOverdueCount > 0 ? ` · ${this.globalBuildingSafetyOverdueCount} contrôle${this.globalBuildingSafetyOverdueCount > 1 ? "s" : ""} en retard` : ""}`
+                : "Aucun contrôle simple à revoir"
+          },
+          {
+            id: "reglementation-duerp",
+            label: "DUERP",
+            value:
+              regulationPending
+                ? "Lecture en préparation"
+                : regulationDelayed
+                ? "Remontée plus lente"
+                : activeDuerpEntriesCount > 0
+                ? `${activeDuerpEntriesCount} risque${activeDuerpEntriesCount > 1 ? "s" : ""} suivi${activeDuerpEntriesCount > 1 ? "s" : ""}`
+                : "Aucun risque suivi pour le moment"
+          }
+        ],
+        statusLabel:
+          regulationPending
+            ? "Préparation"
+            : regulationDelayed
+            ? "Partiel"
+            : this.globalBuildingSafetyOverdueCount > 0 || this.overdueRegulatoryObligationCount > 0
+            ? "À traiter"
+            : this.regulatoryActionCount > 0
+              ? "À vérifier"
+              : "À jour",
+        tone:
+          regulationPending
+            ? "calm"
+            : regulationDelayed
+            ? "progress"
+            : this.globalBuildingSafetyOverdueCount > 0 || this.overdueRegulatoryObligationCount > 0
+            ? "warning"
+            : this.regulatoryActionCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    if (this.isChantierEnabled) {
+      const finalizedWorksiteDocumentsCount = this.worksiteDocuments.filter(
+        (document) => document.lifecycle_status === "finalized"
+      ).length;
+      const chantierPending =
+        this.isChantierDataPending
+        && this.billingWorksites.length === 0
+        && this.worksiteDocuments.length === 0
+        && this.worksiteProofs.length === 0
+        && this.worksiteSignatures.length === 0;
+      const linkedWorksiteSignaturesCount = this.worksiteDocuments.filter(
+        (document) => Boolean(document.linked_signature_id)
+      ).length;
+      const linkedWorksiteProofsCount = this.worksiteDocuments.reduce(
+        (sum, document) => sum + document.linked_proofs.length,
+        0
+      );
+      cards.push({
+        id: "enterprise-chantier",
+        label: "Chantier",
+        headline:
+          chantierPending
+            ? "Module actif"
+            : this.billingWorksites.length > 0
+            ? `${this.billingWorksites.length} chantier${this.billingWorksites.length > 1 ? "s" : ""} suivi${this.billingWorksites.length > 1 ? "s" : ""}`
+            : "Aucun chantier",
+        detail:
+          chantierPending
+            ? "Les premiers repères chantier arrivent. La session connaît déjà ce module."
+            : this.billingWorksites.length > 0
+            ? "Statut terrain, documents chantier et repères liés restent regroupés ici."
+            : "Le module chantier pourra remonter ici ses signaux utiles.",
+        highlights: [
+          {
+            id: "chantier-worksites",
+            label: "Actions terrain",
+            value:
+              chantierPending
+                ? "Lecture en préparation"
+                : this.worksitesNeedingActionCount > 0
+                ? `${this.blockedWorksitesCount} bloqué${this.blockedWorksitesCount > 1 ? "s" : ""} · ${this.plannedWorksitesCount} à préparer`
+                : "Aucun signal terrain prioritaire"
+          },
+          {
+            id: "chantier-documents",
+            label: "Documents chantier",
+            value:
+              chantierPending
+                ? "Lecture en préparation"
+                : this.worksiteDocuments.length > 0
+                ? `${this.worksiteDocuments.length} généré${this.worksiteDocuments.length > 1 ? "s" : ""} · ${finalizedWorksiteDocumentsCount} finalisé${finalizedWorksiteDocumentsCount > 1 ? "s" : ""}`
+                : "Aucun document chantier généré"
+          },
+          {
+            id: "chantier-links",
+            label: "Éléments liés",
+            value:
+              chantierPending
+                ? "Lecture en préparation"
+                : linkedWorksiteSignaturesCount > 0 || linkedWorksiteProofsCount > 0
+                ? `${linkedWorksiteSignaturesCount} signature${linkedWorksiteSignaturesCount > 1 ? "s" : ""} · ${linkedWorksiteProofsCount} preuve${linkedWorksiteProofsCount > 1 ? "s" : ""}`
+                : "Aucune signature ou preuve liée"
+          }
+        ],
+        statusLabel:
+          chantierPending
+            ? "Préparation"
+            : this.blockedWorksitesCount > 0
+            ? "À traiter"
+            : this.plannedWorksitesCount > 0
+              ? "À préparer"
+              : "À jour",
+        tone:
+          chantierPending
+            ? "calm"
+            : this.blockedWorksitesCount > 0
+            ? "warning"
+            : this.billingWorksites.length > 0 && this.plannedWorksitesCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    if (this.isFacturationEnabled) {
+      const outstandingAmountCents = this.invoices.reduce(
+        (sum, invoice) => sum + invoice.outstanding_amount_cents,
+        0
+      );
+      const facturationPending =
+        this.isFacturationDataPending
+        && this.billingCustomers.length === 0
+        && this.quotes.length === 0
+        && this.invoices.length === 0;
+      cards.push({
+        id: "enterprise-facturation",
+        label: "Facturation",
+        headline:
+          facturationPending
+            ? "Module actif"
+            : this.pendingInvoicesCount > 0
+            ? `${this.pendingInvoicesCount} facture${this.pendingInvoicesCount > 1 ? "s" : ""} à suivre`
+            : `${this.billingCustomers.length} client${this.billingCustomers.length > 1 ? "s" : ""} actif${this.billingCustomers.length > 1 ? "s" : ""}`,
+        detail:
+          facturationPending
+            ? "Les premiers repères facturation arrivent. La session connaît déjà ce module."
+            : this.pendingInvoicesCount > 0 || this.activeQuotesCount > 0 || this.quotesToFollowUpCount > 0
+            ? "Devis, factures et suivis utiles sont regroupés dans une lecture rapide."
+            : "Le module reste calme avec une lecture courte des clients et documents suivis.",
+        highlights: [
+          {
+            id: "facturation-invoices",
+            label: "Factures",
+            value:
+              facturationPending
+                ? "Lecture en préparation"
+                : this.pendingInvoicesCount > 0 || this.overdueInvoicesCount > 0
+                ? `${this.pendingInvoicesCount} en attente${this.overdueInvoicesCount > 0 ? ` · ${this.overdueInvoicesCount} en retard` : ""}`
+                : "Aucune facture à suivre"
+          },
+          {
+            id: "facturation-quotes",
+            label: "Devis",
+            value:
+              facturationPending
+                ? "Lecture en préparation"
+                : this.activeQuotesCount > 0 || this.quotesToFollowUpCount > 0
+                ? `${this.activeQuotesCount} en cours${this.quotesToFollowUpCount > 0 ? ` · ${this.quotesToFollowUpCount} à relancer` : ""}`
+                : "Aucun devis en cours"
+          },
+          {
+            id: "facturation-cash",
+            label: "Encaissement",
+            value:
+              facturationPending
+                ? "Lecture en préparation"
+                : outstandingAmountCents > 0
+                ? `${this.formatAmountCents(outstandingAmountCents)} en attente`
+                : `${this.billingCustomers.length} client${this.billingCustomers.length > 1 ? "s" : ""} suivi${this.billingCustomers.length > 1 ? "s" : ""}`
+          }
+        ],
+        statusLabel:
+          facturationPending
+            ? "Préparation"
+            : this.overdueInvoicesCount > 0
+            ? "À traiter"
+            : this.pendingInvoicesCount > 0 || this.quotesToFollowUpCount > 0
+              ? "À suivre"
+              : "À jour",
+        tone:
+          facturationPending
+            ? "calm"
+            : this.overdueInvoicesCount > 0
+            ? "warning"
+            : this.pendingInvoicesCount > 0 || this.quotesToFollowUpCount > 0
+              ? "progress"
+              : "success",
+      });
+    }
+
+    return cards;
+  }
+
+  get dashboardWorksiteOverviewItems(): DashboardWorksiteOverviewItem[] {
+    if (!this.isChantierEnabled) {
+      return [];
+    }
+
+    return this.billingWorksites
+      .map((worksite) => {
+        const worksiteDocuments = this.worksiteDocuments.filter((document) => document.worksite_id === worksite.id);
+        const worksiteQuotes = this.quotes.filter((quote) => quote.worksite_id === worksite.id);
+        const worksiteInvoices = this.invoices.filter((invoice) => invoice.worksite_id === worksite.id);
+        const overdueInvoices = worksiteInvoices.filter((invoice) => invoice.status === "overdue").length;
+        const pendingInvoices = worksiteInvoices.filter((invoice) => invoice.outstanding_amount_cents > 0).length;
+        const draftQuotes = worksiteQuotes.filter((quote) => quote.status === "draft").length;
+        const quotesToFollowUp = worksiteQuotes.filter((quote) => quote.follow_up_status === "to_follow_up").length;
+        const outstandingAmountCents = worksiteInvoices.reduce(
+          (sum, invoice) => sum + invoice.outstanding_amount_cents,
+          0
+        );
+        const plannedLabel = this.formatCompactDate(worksite.planned_for);
+        const updatedLabel = this.formatCompactDate(worksite.updated_at);
+        const linkedQuotesSummary = this.isFacturationEnabled
+          ? this.formatDashboardDocumentSummary(
+              "Devis liés",
+              worksiteQuotes.map((quote) => `${quote.number} (${this.getQuoteStatusLabel(quote.status)})`),
+              "aucun"
+            )
+          : "Devis liés : module Facturation non activé.";
+        const linkedWorksiteDocumentsSummary = this.formatDashboardDocumentSummary(
+          "Documents chantier",
+          worksiteDocuments.map((document) => {
+            const uploadedLabel = this.formatCompactDate(document.uploaded_at);
+            const lifecycleLabel = this.getWorksiteDocumentLifecycleStatusLabel(document.lifecycle_status);
+            return uploadedLabel
+              ? `${document.document_type_label} (${lifecycleLabel}, ${uploadedLabel})`
+              : `${document.document_type_label} (${lifecycleLabel})`;
+          }),
+          "aucun document généré"
+        );
+        const linkedInvoicesSummary = this.isFacturationEnabled
+          ? this.formatDashboardDocumentSummary(
+              "Factures liées",
+              worksiteInvoices.map((invoice) => `${invoice.number} (${this.getInvoiceStatusLabel(invoice.status)})`),
+              "aucune"
+            )
+          : "Factures liées : module Facturation non activé.";
+        const taskParts: string[] = [];
+        const financialParts: string[] = [];
+
+        const signalLabel =
+          worksite.status === "blocked" || overdueInvoices > 0
+            ? "À traiter"
+            : worksite.status === "planned" || pendingInvoices > 0 || draftQuotes > 0
+              ? "À suivre"
+              : "Rien à signaler";
+        const signalTone: CfmTone =
+          signalLabel === "À traiter"
+            ? "warning"
+            : signalLabel === "À suivre"
+              ? "progress"
+              : "success";
+        const operationalParts = [worksite.client_name];
+
+        if (worksite.address) {
+          operationalParts.push(worksite.address);
+        }
+
+        if (worksite.status === "blocked") {
+          taskParts.push("chantier bloqué");
+        } else if (worksite.status === "planned") {
+          taskParts.push("préparation avant intervention");
+        }
+
+        if (overdueInvoices > 0) {
+          taskParts.push(`${overdueInvoices} facture${overdueInvoices > 1 ? "s" : ""} en retard`);
+        } else if (pendingInvoices > 0) {
+          taskParts.push(`${pendingInvoices} facture${pendingInvoices > 1 ? "s" : ""} à suivre`);
+        }
+
+        if (draftQuotes > 0) {
+          taskParts.push(`${draftQuotes} devis en brouillon`);
+        }
+
+        if (quotesToFollowUp > 0) {
+          taskParts.push(`${quotesToFollowUp} devis à relancer`);
+        }
+
+        if (pendingInvoices > 0) {
+          financialParts.push(`${this.formatAmountCents(outstandingAmountCents)} en attente`);
+        }
+
+        if (overdueInvoices > 0) {
+          financialParts.push(`${overdueInvoices} facture${overdueInvoices > 1 ? "s" : ""} en retard`);
+        }
+
+        if (quotesToFollowUp > 0) {
+          financialParts.push(`${quotesToFollowUp} devis à relancer`);
+        }
+
+        return {
+          id: worksite.id,
+          name: worksite.name,
+          summary:
+            this.isFacturationEnabled
+              ? `${operationalParts.join(" · ")} · ${worksiteQuotes.length} devis · ${worksiteInvoices.length} facture${worksiteInvoices.length > 1 ? "s" : ""}`
+              : operationalParts.join(" · "),
+          operationalSummary:
+            plannedLabel
+              ? `Prévu le ${plannedLabel}${updatedLabel ? ` · mis à jour le ${updatedLabel}` : ""}.`
+              : updatedLabel
+                ? `Mis à jour le ${updatedLabel}.`
+                : "Lecture chantier disponible.",
+          taskSummary:
+            taskParts.length > 0
+              ? `Points à traiter : ${taskParts.join(", ")}.`
+              : "Points à traiter : aucun signal immédiat.",
+          worksiteDocuments: worksiteDocuments.map((document) => this.mapDashboardWorksiteDocumentItem(document)),
+          coordination: this.buildDashboardCoordinationState(worksite.coordination),
+          linkedWorksiteDocumentsSummary,
+          linkedQuotesSummary,
+          linkedInvoicesSummary,
+          worksiteDocumentsCount: worksiteDocuments.length,
+          financialSummary:
+            this.isFacturationEnabled
+              ? financialParts.length > 0
+                ? `Signal financier : ${financialParts.join(", ")}.`
+                : "Signal financier : aucun point simple à remonter."
+              : null,
+          regulatorySummary: null,
+          statusLabel: this.getWorksiteStatusLabel(worksite.status),
+          statusTone: this.getWorksiteStatusTone(worksite.status),
+          signalLabel,
+          signalTone,
+        };
+      })
+      .sort(
+        (left, right) =>
+          this.getDashboardOverviewSignalRank(left.signalLabel) - this.getDashboardOverviewSignalRank(right.signalLabel)
+          || left.name.localeCompare(right.name)
+      );
+  }
+
+  get dashboardCustomerOverviewItems(): DashboardCustomerOverviewItem[] {
+    if (!this.isFacturationEnabled) {
+      return [];
+    }
+
+    return this.billingCustomers
+      .map((customer) => {
+        const customerQuotes = this.quotes.filter((quote) => quote.customer_id === customer.id);
+        const customerInvoices = this.invoices.filter((invoice) => invoice.customer_id === customer.id);
+        const overdueInvoices = customerInvoices.filter((invoice) => invoice.status === "overdue").length;
+        const pendingInvoices = customerInvoices.filter((invoice) => invoice.outstanding_amount_cents > 0).length;
+        const quotesToFollowUp = customerQuotes.filter((quote) => quote.follow_up_status === "to_follow_up").length;
+        const outstandingAmountCents = customerInvoices.reduce(
+          (sum, invoice) => sum + invoice.outstanding_amount_cents,
+          0
+        );
+
+        const signalLabel =
+          overdueInvoices > 0
+            ? "À traiter"
+            : pendingInvoices > 0 || quotesToFollowUp > 0
+              ? "À suivre"
+              : "Rien à signaler";
+        const signalTone: CfmTone =
+          signalLabel === "À traiter"
+            ? "warning"
+            : signalLabel === "À suivre"
+              ? "progress"
+              : "success";
+        const statusTone: CfmTone =
+          overdueInvoices > 0
+            ? "warning"
+            : pendingInvoices > 0 || quotesToFollowUp > 0
+              ? "progress"
+              : "neutral";
+        const contextParts: string[] = [];
+
+        if (overdueInvoices > 0) {
+          contextParts.push(`${overdueInvoices} facture${overdueInvoices > 1 ? "s" : ""} en retard.`);
+        } else if (pendingInvoices > 0) {
+          contextParts.push(`${this.formatAmountCents(outstandingAmountCents)} en attente.`);
+        }
+
+        if (quotesToFollowUp > 0) {
+          contextParts.push(`${quotesToFollowUp} devis à relancer.`);
+        }
+
+        if (contextParts.length === 0) {
+          contextParts.push("Suivi commercial à jour.");
+        }
+
+        return {
+          id: customer.id,
+          name: customer.name,
+          summary:
+            `${this.getCustomerTypeLabel(customer.customer_type)} · ${customerQuotes.length} devis · ${customerInvoices.length} facture${customerInvoices.length > 1 ? "s" : ""}`,
+          context: contextParts.join(" "),
+          statusLabel:
+            pendingInvoices > 0 || quotesToFollowUp > 0
+              ? "À suivre"
+              : customerQuotes.length > 0 || customerInvoices.length > 0
+                ? "Suivi normal"
+                : "À jour",
+          statusTone,
+          signalLabel,
+          signalTone,
+        };
+      })
+      .sort(
+        (left, right) =>
+          this.getDashboardOverviewSignalRank(left.signalLabel) - this.getDashboardOverviewSignalRank(right.signalLabel)
+          || left.name.localeCompare(right.name)
+      );
   }
 
   get canCreateQuote(): boolean {
@@ -3498,6 +7319,56 @@ export class AppComponent implements DoCheck {
     return this.filteredBuildingSafetyItems.filter((item) => item.alert_status === "ok").length;
   }
 
+  get globalBuildingSafetyOverdueCount(): number {
+    return this.buildingSafetyItems.filter((item) => item.alert_status === "overdue").length;
+  }
+
+  get activeQuotesCount(): number {
+    return this.quotes.filter((quote) => quote.status === "draft" || quote.status === "sent").length;
+  }
+
+  get pendingInvoicesCount(): number {
+    return this.invoices.filter((invoice) => invoice.outstanding_amount_cents > 0).length;
+  }
+
+  get overdueInvoicesCount(): number {
+    return this.invoices.filter((invoice) => invoice.status === "overdue").length;
+  }
+
+  get quotesToFollowUpCount(): number {
+    return this.quotes.filter((quote) => quote.follow_up_status === "to_follow_up").length;
+  }
+
+  get regulatoryObligationsToVerifyCount(): number {
+    return (
+      this.regulatoryProfile?.applicable_obligations.filter((obligation) => obligation.status === "to_verify").length
+      ?? 0
+    );
+  }
+
+  get overdueRegulatoryObligationCount(): number {
+    return (
+      this.regulatoryProfile?.applicable_obligations.filter((obligation) => obligation.status === "overdue").length
+      ?? 0
+    );
+  }
+
+  get regulatoryActionCount(): number {
+    return this.regulatoryObligationsToVerifyCount + this.overdueRegulatoryObligationCount + this.buildingSafetyAlerts.length;
+  }
+
+  get blockedWorksitesCount(): number {
+    return this.billingWorksites.filter((worksite) => worksite.status === "blocked").length;
+  }
+
+  get plannedWorksitesCount(): number {
+    return this.billingWorksites.filter((worksite) => worksite.status === "planned").length;
+  }
+
+  get worksitesNeedingActionCount(): number {
+    return this.blockedWorksitesCount + this.plannedWorksitesCount;
+  }
+
   async submitLogin(): Promise<void> {
     this.loading = true;
     this.errorMessage = "";
@@ -3508,13 +7379,47 @@ export class AppComponent implements DoCheck {
         email: this.email,
         password: this.password
       });
+
+      if (!response.access_token || !response.session?.current_membership?.organization?.id) {
+        throw new Error("La réponse de connexion reçue est incomplète.");
+      }
+
+      const persistedSession = {
+        accessToken: getStoredAccessToken(),
+        organizationId: getStoredOrganizationId(),
+      };
+
+      if (
+        persistedSession.accessToken !== response.access_token
+        || persistedSession.organizationId !== response.session.current_membership.organization.id
+      ) {
+        throw new Error("La session n'a pas pu être confirmée dans le navigateur après la connexion.");
+      }
+
       this.accessToken = response.access_token;
       this.session = response.session;
       this.selectedOrganizationId = response.session.current_membership.organization.id;
-      persistSession(response.access_token, response.session);
-      await this.refreshOrganizationWorkspace();
+      this.loading = false;
+
+      let navigationSucceeded = await this.router.navigateByUrl("/app/home");
+      let finalPath = this.router.url.split("#")[0] || "/login";
+
+      if (!navigationSucceeded || this.isLoginRoutePath(finalPath)) {
+        console.warn("[auth] primary navigation did not leave login. Retrying.", {
+          navigationSucceeded,
+          currentUrl: this.router.url,
+        });
+        navigationSucceeded = await this.router.navigate(["/app", "home"], { replaceUrl: true });
+        finalPath = this.router.url.split("#")[0] || "/login";
+      }
+
+      if (!navigationSucceeded || this.isLoginRoutePath(finalPath)) {
+        throw new Error("La redirection après connexion n'a pas abouti.");
+      }
+
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      console.error("[auth] login flow failed after POST /auth/login.", error);
+      this.errorMessage = this.toErrorMessage(error, "auth");
     } finally {
       this.loading = false;
     }
@@ -3527,7 +7432,35 @@ export class AppComponent implements DoCheck {
     if (this.buildingSafetyEditingId) {
       this.cancelBuildingSafetyEditing();
     }
+    this.resetBetaFeedback();
     await this.refreshSession(this.selectedOrganizationId);
+  }
+
+  async copyBetaFeedback(): Promise<void> {
+    if (!this.canCopyBetaFeedback) {
+      return;
+    }
+
+    this.betaFeedbackCopyBusy = true;
+    this.betaFeedbackError = "";
+    this.betaFeedbackNotice = "";
+
+    try {
+      await this.copyTextToClipboard(this.buildBetaFeedbackPayload());
+      this.betaFeedbackNotice = "Retour prêt à coller dans votre canal beta ou pilote.";
+    } catch (error) {
+      this.betaFeedbackError = "La copie automatique n'a pas abouti. Le texte reste visible ci-dessous.";
+    } finally {
+      this.betaFeedbackCopyBusy = false;
+    }
+  }
+
+  resetBetaFeedback(): void {
+    this.betaFeedbackCategory = "improvement";
+    this.betaFeedbackArea = "cockpit";
+    this.betaFeedbackMessageText = "";
+    this.betaFeedbackNotice = "";
+    this.betaFeedbackError = "";
   }
 
   async toggleModule(moduleCode: ModuleCode, nextValue: boolean): Promise<void> {
@@ -3543,7 +7476,7 @@ export class AppComponent implements DoCheck {
       await this.refreshSession(this.selectedOrganizationId);
       this.feedbackMessage = "Modules mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.loading = false;
     }
@@ -3576,7 +7509,7 @@ export class AppComponent implements DoCheck {
       await this.refreshSession(this.selectedOrganizationId);
       this.feedbackMessage = successMessage;
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.organizationProfileSaving = false;
     }
@@ -3604,7 +7537,7 @@ export class AppComponent implements DoCheck {
       };
       this.feedbackMessage = "Site ajouté.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.organizationSiteSaving = false;
     }
@@ -3660,7 +7593,7 @@ export class AppComponent implements DoCheck {
       this.cancelCustomerEditing();
       this.feedbackMessage = wasEditing ? "Client mis à jour." : "Client ajouté.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.customerSaving = false;
     }
@@ -3723,7 +7656,7 @@ export class AppComponent implements DoCheck {
       this.cancelQuoteEditing();
       this.feedbackMessage = "Devis mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.quoteEditingSaving = false;
     }
@@ -3786,7 +7719,7 @@ export class AppComponent implements DoCheck {
       this.cancelInvoiceEditing();
       this.feedbackMessage = "Facture mise à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.invoiceEditingSaving = false;
     }
@@ -3825,10 +7758,422 @@ export class AppComponent implements DoCheck {
       this.refreshBillingDraftSnapshots();
       this.feedbackMessage = "Devis ajouté.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.quoteSaving = false;
     }
+  }
+
+  async exportWorksiteSummaryPdf(worksiteId: string): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canReadOrganization) {
+      return;
+    }
+
+    this.worksiteDocumentPdfBusyId = worksiteId;
+    this.errorMessage = "";
+    this.feedbackMessage = "Préparation de la fiche chantier PDF...";
+    try {
+      const { blob, fileName } = await downloadWorksiteSummaryPdf(
+        this.accessToken,
+        this.selectedOrganizationId,
+        worksiteId
+      );
+      this.downloadBlob(blob, fileName);
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = "Fiche chantier PDF générée.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "export");
+    } finally {
+      this.worksiteDocumentPdfBusyId = null;
+    }
+  }
+
+  async exportWorksitePreventionPlanPdf(worksiteId: string): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canReadOrganization) {
+      return;
+    }
+
+    this.worksitePreventionPlanPdfBusyId = worksiteId;
+    this.errorMessage = "";
+    this.feedbackMessage = "Préparation du plan de prévention PDF...";
+    try {
+      const { blob, fileName } = await downloadWorksitePreventionPlanPdf(
+        this.accessToken,
+        this.selectedOrganizationId,
+        worksiteId
+      );
+      this.downloadBlob(blob, fileName);
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = "Plan de prévention PDF généré.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "export");
+    } finally {
+      this.worksitePreventionPlanPdfBusyId = null;
+    }
+  }
+
+  async downloadWorksiteDocument(document: DashboardWorksiteDocumentItem): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canReadOrganization) {
+      return;
+    }
+
+    this.worksiteDocumentDownloadBusyId = document.id;
+    this.errorMessage = "";
+    this.feedbackMessage = "Préparation du document chantier...";
+    try {
+      const { blob, fileName } = await downloadGeneratedWorksiteDocument(
+        this.accessToken,
+        this.selectedOrganizationId,
+        document.id
+      );
+      this.downloadBlob(blob, fileName);
+      this.markWorksiteDocumentAsStored(document.id, blob.size);
+      this.feedbackMessage = "Document chantier téléchargé.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "export");
+    } finally {
+      this.worksiteDocumentDownloadBusyId = null;
+    }
+  }
+
+  toggleWorksiteDocumentDetails(documentId: string): void {
+    this.selectedWorksiteDocumentDetailId =
+      this.selectedWorksiteDocumentDetailId === documentId ? null : documentId;
+  }
+
+  private markWorksiteDocumentAsStored(documentId: string, sizeBytes: number): void {
+    this.worksiteDocuments = this.worksiteDocuments.map((document) =>
+      document.id === documentId
+        ? {
+            ...document,
+            has_stored_file: true,
+            size_bytes: sizeBytes > 0 ? sizeBytes : document.size_bytes,
+          }
+        : document
+    );
+  }
+
+  async saveWorksiteCoordination(item: DashboardWorksiteOverviewItem): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    const draft = this.getWorksiteCoordinationDraft(item.id);
+    this.worksiteCoordinationBusyId = item.id;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      await updateWorksiteCoordination(
+        this.accessToken,
+        this.selectedOrganizationId,
+        item.id,
+        {
+          status: draft.status,
+          assignee_user_id: draft.assigneeUserId || null,
+          comment_text: this.normalizeOptionalText(draft.commentText),
+        },
+      );
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = "Coordination du chantier mise à jour.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "update");
+    } finally {
+      this.worksiteCoordinationBusyId = null;
+    }
+  }
+
+  async saveWorksiteDocumentCoordination(document: DashboardWorksiteDocumentItem): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    const draft = this.getWorksiteDocumentCoordinationDraft(document.id);
+    this.worksiteDocumentCoordinationBusyId = document.id;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      await updateWorksiteDocumentCoordination(
+        this.accessToken,
+        this.selectedOrganizationId,
+        document.id,
+        {
+          status: draft.status,
+          assignee_user_id: draft.assigneeUserId || null,
+          comment_text: this.normalizeOptionalText(draft.commentText),
+        },
+      );
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = "Coordination du document mise à jour.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "update");
+    } finally {
+      this.worksiteDocumentCoordinationBusyId = null;
+    }
+  }
+
+  async changeWorksiteDocumentLifecycleStatus(
+    documentId: string,
+    lifecycleStatus: DocumentLifecycleStatus,
+  ): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    const existingDocument = this.worksiteDocuments.find((document) => document.id === documentId);
+    if (!existingDocument || existingDocument.lifecycle_status === lifecycleStatus) {
+      return;
+    }
+
+    this.worksiteDocumentStatusBusyId = documentId;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      await updateWorksiteDocumentStatus(
+        this.accessToken,
+        this.selectedOrganizationId,
+        documentId,
+        { lifecycle_status: lifecycleStatus },
+      );
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage =
+        lifecycleStatus === "finalized"
+          ? "Document chantier marqué comme finalisé."
+          : "Document chantier repassé en brouillon.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "update");
+    } finally {
+      this.worksiteDocumentStatusBusyId = null;
+    }
+  }
+
+  async changeWorksiteDocumentSignature(
+    documentId: string,
+    signatureDocumentId: string,
+  ): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    const existingDocument = this.worksiteDocuments.find((document) => document.id === documentId);
+    const nextSignatureDocumentId = signatureDocumentId || null;
+    if (!existingDocument || existingDocument.linked_signature_id === nextSignatureDocumentId) {
+      return;
+    }
+
+    this.worksiteDocumentSignatureBusyId = documentId;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      await updateWorksiteDocumentSignature(
+        this.accessToken,
+        this.selectedOrganizationId,
+        documentId,
+        { signature_document_id: nextSignatureDocumentId },
+      );
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = nextSignatureDocumentId
+        ? "Signature liée au document chantier."
+        : "Lien vers la signature retiré du document chantier.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "update");
+    } finally {
+      this.worksiteDocumentSignatureBusyId = null;
+    }
+  }
+
+  async toggleWorksiteDocumentProof(
+    documentId: string,
+    proofDocumentId: string,
+    isLinked: boolean,
+  ): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    const existingDocument = this.worksiteDocuments.find((document) => document.id === documentId);
+    if (!existingDocument) {
+      return;
+    }
+
+    const nextProofIds = isLinked
+      ? [...existingDocument.linked_proofs.map((proof) => proof.id), proofDocumentId]
+      : existingDocument.linked_proofs
+          .map((proof) => proof.id)
+          .filter((proofId) => proofId !== proofDocumentId);
+    const normalizedNextProofIds = Array.from(new Set(nextProofIds));
+    const currentProofIds = existingDocument.linked_proofs.map((proof) => proof.id);
+    if (JSON.stringify(currentProofIds) === JSON.stringify(normalizedNextProofIds)) {
+      return;
+    }
+
+    this.worksiteDocumentProofBusyId = documentId;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      await updateWorksiteDocumentProofs(
+        this.accessToken,
+        this.selectedOrganizationId,
+        documentId,
+        { proof_document_ids: normalizedNextProofIds },
+      );
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = isLinked
+        ? "Preuve liée au document chantier."
+        : "Lien vers la preuve retiré du document chantier.";
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "update");
+    } finally {
+      this.worksiteDocumentProofBusyId = null;
+    }
+  }
+
+  toggleWorksitePreventionPlanEditor(worksiteId: string): void {
+    if (this.worksitePreventionPlanEditingId === worksiteId) {
+      this.cancelWorksitePreventionPlanEditing();
+      return;
+    }
+
+    const worksite = this.billingWorksites.find((entry) => entry.id === worksiteId);
+    if (!worksite) {
+      return;
+    }
+
+    const initialForm = this.buildWorksitePreventionPlanForm(worksite);
+    this.worksitePreventionPlanEditingId = worksiteId;
+    this.worksitePreventionPlanInitialForm = this.cloneWorksitePreventionPlanForm(initialForm);
+    this.worksitePreventionPlanForm = this.cloneWorksitePreventionPlanForm(initialForm);
+    this.errorMessage = "";
+    this.feedbackMessage = `Plan de prévention prêt à ajuster pour ${worksite.name}.`;
+  }
+
+  cancelWorksitePreventionPlanEditing(): void {
+    this.worksitePreventionPlanEditingId = null;
+    this.worksitePreventionPlanPdfBusyId = null;
+    this.worksitePreventionPlanInitialForm = null;
+    this.resetWorksitePreventionPlanForm();
+  }
+
+  restoreInitialWorksitePreventionPlanForm(): void {
+    if (!this.worksitePreventionPlanInitialForm) {
+      return;
+    }
+
+    this.worksitePreventionPlanForm = this.cloneWorksitePreventionPlanForm(this.worksitePreventionPlanInitialForm);
+    this.errorMessage = "";
+    this.feedbackMessage = "Préremplissage initial réappliqué.";
+  }
+
+  async exportAdjustedWorksitePreventionPlanPdf(worksiteId: string): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canReadOrganization) {
+      return;
+    }
+
+    this.worksitePreventionPlanPdfBusyId = worksiteId;
+    this.errorMessage = "";
+    this.feedbackMessage = "Préparation du plan de prévention PDF avec vos ajustements...";
+    try {
+      const payload: WorksitePreventionPlanExportRequest = {
+        useful_date: this.normalizeOptionalText(this.worksitePreventionPlanForm.usefulDate),
+        intervention_context: this.normalizeOptionalText(this.worksitePreventionPlanForm.interventionContext),
+        vigilance_points: this.splitMultilineItems(this.worksitePreventionPlanForm.vigilancePoints),
+        measure_points: this.splitMultilineItems(this.worksitePreventionPlanForm.measurePoints),
+        additional_contact: this.normalizeOptionalText(this.worksitePreventionPlanForm.additionalContact),
+      };
+      const { blob, fileName } = await downloadWorksitePreventionPlanPdf(
+        this.accessToken,
+        this.selectedOrganizationId,
+        worksiteId,
+        payload
+      );
+      this.downloadBlob(blob, fileName);
+      await this.refreshOrganizationWorkspace();
+      this.feedbackMessage = "Plan de prévention simplifié généré avec les ajustements.";
+      this.cancelWorksitePreventionPlanEditing();
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "export");
+    } finally {
+      this.worksitePreventionPlanPdfBusyId = null;
+    }
+  }
+
+  prepareQuoteFromWorksite(worksiteId: string): void {
+    const worksite = this.billingWorksites.find((entry) => entry.id === worksiteId);
+    if (!worksite) {
+      return;
+    }
+
+    const matchedCustomer = this.findBillingCustomerByName(worksite.client_name);
+    this.quoteForm = {
+      ...this.quoteForm,
+      customerId: matchedCustomer?.id ?? "",
+      worksiteId: worksite.id,
+      title: this.quoteForm.title.trim() ? this.quoteForm.title : worksite.name,
+    };
+    this.errorMessage = "";
+    this.feedbackMessage = matchedCustomer
+      ? `Devis préparé depuis le chantier ${worksite.name}.`
+      : `Devis préparé depuis le chantier ${worksite.name}. Client à confirmer manuellement.`;
+    void this.navigateToWorkspaceRoute("/app/facturation", "billing-quote-card");
+  }
+
+  prepareInvoiceFromWorksite(worksiteId: string): void {
+    const worksite = this.billingWorksites.find((entry) => entry.id === worksiteId);
+    if (!worksite) {
+      return;
+    }
+
+    const matchedCustomer = this.findBillingCustomerByName(worksite.client_name);
+    this.invoiceForm = {
+      ...this.invoiceForm,
+      customerId: matchedCustomer?.id ?? "",
+      worksiteId: worksite.id,
+      title: this.invoiceForm.title.trim() ? this.invoiceForm.title : worksite.name,
+    };
+    this.errorMessage = "";
+    this.feedbackMessage = matchedCustomer
+      ? `Facture préparée depuis le chantier ${worksite.name}.`
+      : `Facture préparée depuis le chantier ${worksite.name}. Client à confirmer manuellement.`;
+    void this.navigateToWorkspaceRoute("/app/facturation", "billing-invoice-card");
+  }
+
+  prepareQuoteFromCustomer(customerId: string): void {
+    const customer = this.billingCustomers.find((entry) => entry.id === customerId);
+    if (!customer) {
+      return;
+    }
+
+    const matchedWorksite = this.findSingleWorksiteForCustomer(customer.name);
+    this.quoteForm = {
+      ...this.quoteForm,
+      customerId: customer.id,
+      worksiteId: matchedWorksite?.id ?? "",
+      title: this.quoteForm.title.trim() ? this.quoteForm.title : customer.name,
+    };
+    this.errorMessage = "";
+    this.feedbackMessage = matchedWorksite
+      ? `Devis préparé pour ${customer.name}, avec le chantier ${matchedWorksite.name}.`
+      : `Devis préparé pour ${customer.name}. Aucun chantier repris automatiquement.`;
+    void this.navigateToWorkspaceRoute("/app/facturation", "billing-quote-card");
+  }
+
+  prepareInvoiceFromCustomer(customerId: string): void {
+    const customer = this.billingCustomers.find((entry) => entry.id === customerId);
+    if (!customer) {
+      return;
+    }
+
+    const matchedWorksite = this.findSingleWorksiteForCustomer(customer.name);
+    this.invoiceForm = {
+      ...this.invoiceForm,
+      customerId: customer.id,
+      worksiteId: matchedWorksite?.id ?? "",
+      title: this.invoiceForm.title.trim() ? this.invoiceForm.title : customer.name,
+    };
+    this.errorMessage = "";
+    this.feedbackMessage = matchedWorksite
+      ? `Facture préparée pour ${customer.name}, avec le chantier ${matchedWorksite.name}.`
+      : `Facture préparée pour ${customer.name}. Aucun chantier repris automatiquement.`;
+    void this.navigateToWorkspaceRoute("/app/facturation", "billing-invoice-card");
   }
 
   async changeQuoteWorksite(quote: QuoteRecord, worksiteId: string): Promise<void> {
@@ -3846,7 +8191,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Chantier du devis mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.quoteWorksiteBusyId = null;
     }
@@ -3859,13 +8204,13 @@ export class AppComponent implements DoCheck {
 
     this.quotePdfBusyId = quote.id;
     this.errorMessage = "";
-    this.feedbackMessage = "";
+    this.feedbackMessage = "Préparation du PDF devis...";
     try {
       const { blob, fileName } = await downloadQuotePdf(this.accessToken, this.selectedOrganizationId, quote.id);
       this.downloadBlob(blob, fileName);
       this.feedbackMessage = "PDF devis généré.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "export");
     } finally {
       this.quotePdfBusyId = null;
     }
@@ -3884,7 +8229,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = `Facture ${invoice.number} créée depuis le devis ${quote.number}.`;
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.quoteDuplicateBusyId = null;
     }
@@ -3911,7 +8256,7 @@ export class AppComponent implements DoCheck {
       this.quoteHistoryById = { ...this.quoteHistoryById, [quote.id]: logs };
       this.quoteHistoryOpenId = quote.id;
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "load");
     } finally {
       this.quoteHistoryBusyId = null;
     }
@@ -3933,7 +8278,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Statut du devis mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.quoteStatusBusyId = null;
     }
@@ -3957,7 +8302,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Suivi du devis mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.quoteFollowUpBusyId = null;
     }
@@ -3996,7 +8341,7 @@ export class AppComponent implements DoCheck {
       this.refreshBillingDraftSnapshots();
       this.feedbackMessage = "Facture ajoutée.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.invoiceSaving = false;
     }
@@ -4017,7 +8362,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Chantier de la facture mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.invoiceWorksiteBusyId = null;
     }
@@ -4030,13 +8375,13 @@ export class AppComponent implements DoCheck {
 
     this.invoicePdfBusyId = invoice.id;
     this.errorMessage = "";
-    this.feedbackMessage = "";
+    this.feedbackMessage = "Préparation du PDF facture...";
     try {
       const { blob, fileName } = await downloadInvoicePdf(this.accessToken, this.selectedOrganizationId, invoice.id);
       this.downloadBlob(blob, fileName);
       this.feedbackMessage = "PDF facture généré.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "export");
     } finally {
       this.invoicePdfBusyId = null;
     }
@@ -4063,7 +8408,7 @@ export class AppComponent implements DoCheck {
       this.invoiceHistoryById = { ...this.invoiceHistoryById, [invoice.id]: logs };
       this.invoiceHistoryOpenId = invoice.id;
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "load");
     } finally {
       this.invoiceHistoryBusyId = null;
     }
@@ -4085,7 +8430,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Statut de la facture mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.invoiceStatusBusyId = null;
     }
@@ -4109,7 +8454,7 @@ export class AppComponent implements DoCheck {
       await this.refreshOrganizationWorkspace();
       this.feedbackMessage = "Suivi de la facture mis à jour.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.invoiceFollowUpBusyId = null;
     }
@@ -4161,7 +8506,7 @@ export class AppComponent implements DoCheck {
       this.cancelInvoicePayment();
       this.feedbackMessage = "Paiement enregistré.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.invoicePaymentBusyId = null;
     }
@@ -4216,7 +8561,7 @@ export class AppComponent implements DoCheck {
       this.cancelBuildingSafetyEditing();
       this.feedbackMessage = wasEditing ? "Élément sécurité mis à jour." : "Élément sécurité ajouté.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.buildingSafetySaving = false;
     }
@@ -4240,7 +8585,7 @@ export class AppComponent implements DoCheck {
       }
       this.feedbackMessage = item.status === "active" ? "Élément archivé." : "Élément réactivé.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.buildingSafetyStatusBusyId = null;
     }
@@ -4293,7 +8638,7 @@ export class AppComponent implements DoCheck {
       this.cancelDuerpEditing();
       this.feedbackMessage = wasEditing ? "Entrée DUERP mise à jour." : "Entrée DUERP ajoutée.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.duerpSaving = false;
     }
@@ -4317,7 +8662,7 @@ export class AppComponent implements DoCheck {
       }
       this.feedbackMessage = entry.status === "active" ? "Entrée DUERP archivée." : "Entrée DUERP réactivée.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.duerpStatusBusyId = null;
     }
@@ -4358,7 +8703,7 @@ export class AppComponent implements DoCheck {
       this.resetRegulatoryEvidenceForm();
       this.feedbackMessage = "Pièce justificative ajoutée.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
       this.regulatoryEvidenceSaving = false;
     }
@@ -4371,7 +8716,7 @@ export class AppComponent implements DoCheck {
 
     this.regulatoryExporting = true;
     this.errorMessage = "";
-    this.feedbackMessage = "";
+    this.feedbackMessage = "Préparation de l'export réglementaire PDF...";
     try {
       const { blob, fileName } = await downloadRegulatoryExportPdf(this.accessToken, this.selectedOrganizationId);
       const objectUrl = window.URL.createObjectURL(blob);
@@ -4382,7 +8727,7 @@ export class AppComponent implements DoCheck {
       window.URL.revokeObjectURL(objectUrl);
       this.feedbackMessage = "PDF réglementaire généré.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "export");
     } finally {
       this.regulatoryExporting = false;
     }
@@ -4409,7 +8754,7 @@ export class AppComponent implements DoCheck {
       this.feedbackMessage =
         updatedSite.status === "active" ? "Site réactivé." : "Site archivé.";
     } catch (error) {
-      this.errorMessage = this.toErrorMessage(error);
+      this.errorMessage = this.toErrorMessage(error, "update");
     } finally {
       this.organizationSiteStatusBusyId = null;
     }
@@ -4447,58 +8792,8 @@ export class AppComponent implements DoCheck {
   }
 
   logout(): void {
-    clearSession();
-    this.accessToken = null;
-    this.selectedOrganizationId = null;
-    this.session = null;
-    this.regulatoryExporting = false;
-    this.organizationProfile = null;
-    this.organizationSites = [];
-    this.regulatoryProfile = null;
-    this.selectedObligationId = null;
-    this.billingCustomers = [];
-    this.billingWorksites = [];
-    this.quotes = [];
-    this.invoices = [];
-    this.quoteEditingId = null;
-    this.quoteEditingSaving = false;
-    this.quoteStatusBusyId = null;
-    this.quoteFollowUpBusyId = null;
-    this.quoteWorksiteBusyId = null;
-    this.quoteDuplicateBusyId = null;
-    this.quotePdfBusyId = null;
-    this.quoteHistoryBusyId = null;
-    this.quoteHistoryOpenId = null;
-    this.quoteHistoryById = {};
-    this.invoiceEditingId = null;
-    this.invoiceEditingSaving = false;
-    this.invoiceStatusBusyId = null;
-    this.invoiceFollowUpBusyId = null;
-    this.invoicePaymentBusyId = null;
-    this.invoicePaymentId = null;
-    this.invoiceWorksiteBusyId = null;
-    this.invoicePdfBusyId = null;
-    this.invoiceHistoryBusyId = null;
-    this.invoiceHistoryOpenId = null;
-    this.invoiceHistoryById = {};
-    this.buildingSafetyItems = [];
-    this.buildingSafetyAlerts = [];
-    this.duerpEntries = [];
-    this.regulatoryEvidences = [];
-    this.buildingSafetyEditingId = null;
-    this.duerpEditingId = null;
-    this.selectedSafetySiteId = "all";
-    this.errorMessage = "";
-    this.feedbackMessage = "";
-    this.resetCustomerForm();
-    this.resetQuoteForm();
-    this.resetInvoiceForm();
-    this.resetInvoicePaymentForm();
-    this.resetBuildingSafetyForm();
-    this.resetDuerpForm();
-    this.resetRegulatoryEvidenceForm();
-    this.billingDraftsHydratedScope = null;
-    this.refreshBillingDraftSnapshots();
+    this.clearAuthenticatedState(true, "logout");
+    void this.router.navigateByUrl("/login");
   }
 
   getSiteTypeLabel(siteType: OrganizationSiteType): string {
@@ -4535,6 +8830,181 @@ export class AppComponent implements DoCheck {
       case "individual":
         return "Particulier";
     }
+  }
+
+  getWorksiteStatusLabel(status: WorksiteApiSummary["status"]): string {
+    switch (status) {
+      case "planned":
+        return "Planifié";
+      case "in_progress":
+        return "En cours";
+      case "blocked":
+        return "Bloqué";
+      case "completed":
+        return "Terminé";
+    }
+  }
+
+  getWorksiteStatusTone(status: WorksiteApiSummary["status"]): CfmTone {
+    switch (status) {
+      case "planned":
+        return "calm";
+      case "in_progress":
+        return "progress";
+      case "blocked":
+        return "warning";
+      case "completed":
+        return "success";
+    }
+  }
+
+  getWorksiteDocumentLifecycleStatusLabel(status: DocumentLifecycleStatus): string {
+    switch (status) {
+      case "draft":
+        return "Brouillon";
+      case "finalized":
+        return "Finalisé";
+    }
+  }
+
+  getWorksiteDocumentLifecycleStatusTone(status: DocumentLifecycleStatus): CfmTone {
+    switch (status) {
+      case "draft":
+        return "progress";
+      case "finalized":
+        return "success";
+    }
+  }
+
+  getWorksiteDocumentTechnicalStatusLabel(status: RegulatoryEvidenceRecord["status"]): string {
+    switch (status) {
+      case "pending":
+        return "En préparation";
+      case "available":
+        return "Prêt";
+      case "failed":
+        return "À vérifier";
+      case "archived":
+        return "Archivé";
+    }
+  }
+
+  getWorksiteDocumentTechnicalStatusTone(status: RegulatoryEvidenceRecord["status"]): CfmTone {
+    switch (status) {
+      case "pending":
+        return "calm";
+      case "available":
+        return "success";
+      case "failed":
+        return "warning";
+      case "archived":
+        return "neutral";
+    }
+  }
+
+  getWorksiteCoordinationStatusLabel(status: WorksiteCoordinationStatus): string {
+    switch (status) {
+      case "todo":
+        return "À faire";
+      case "in_progress":
+        return "En cours";
+      case "done":
+        return "Fait";
+    }
+  }
+
+  getWorksiteCoordinationStatusTone(status: WorksiteCoordinationStatus): CfmTone {
+    switch (status) {
+      case "todo":
+        return "warning";
+      case "in_progress":
+        return "progress";
+      case "done":
+        return "success";
+    }
+  }
+
+  getWorksiteDocumentSignatureStatusLabel(signatureId: string | null): string {
+    return signatureId ? "Signature liée" : "Aucune signature liée";
+  }
+
+  getWorksiteDocumentSignatureStatusTone(signatureId: string | null): CfmTone {
+    return signatureId ? "success" : "neutral";
+  }
+
+  isWorksiteSummaryDocumentType(documentType: string): boolean {
+    return documentType === "worksite_summary_pdf";
+  }
+
+  isWorksitePreventionPlanDocumentType(documentType: string): boolean {
+    return documentType === "worksite_prevention_plan_pdf";
+  }
+
+  formatWorksiteLinkedSignatureDetail(document: WorksiteDocumentRecord): string | null {
+    if (!document.linked_signature_label) {
+      return null;
+    }
+
+    const uploadedLabel = this.formatCompactDate(document.linked_signature_uploaded_at);
+    if (uploadedLabel) {
+      return `Signature du ${uploadedLabel}`;
+    }
+
+    if (document.linked_signature_file_name && document.linked_signature_file_name !== document.linked_signature_label) {
+      return document.linked_signature_file_name;
+    }
+
+    return "Signature chantier liée";
+  }
+
+  mapLinkedWorksiteSignatureItem(document: WorksiteDocumentRecord): DashboardWorksiteLinkedAssetItem | null {
+    if (!document.linked_signature_id || !document.linked_signature_label) {
+      return null;
+    }
+
+    const linkedSignature = this.worksiteSignatures.find((signature) => signature.id === document.linked_signature_id);
+    const status = linkedSignature?.status ?? "available";
+    return {
+      id: document.linked_signature_id,
+      label: document.linked_signature_label,
+      detail: this.formatWorksiteLinkedSignatureDetail(document),
+      statusLabel: this.getWorksiteDocumentTechnicalStatusLabel(status),
+      statusTone: this.getWorksiteDocumentTechnicalStatusTone(status),
+    };
+  }
+
+  mapLinkedWorksiteProofItems(document: WorksiteDocumentRecord): DashboardWorksiteLinkedAssetItem[] {
+    return document.linked_proofs.map((proof) => ({
+      id: proof.id,
+      label: proof.label,
+      detail: this.formatWorksiteProofDetail(proof),
+      statusLabel: this.getWorksiteDocumentTechnicalStatusLabel(proof.status),
+      statusTone: this.getWorksiteDocumentTechnicalStatusTone(proof.status),
+    }));
+  }
+
+  formatWorksiteLinkedProofsSummary(document: WorksiteDocumentRecord): string | null {
+    if (document.linked_proofs.length === 0) {
+      return null;
+    }
+
+    const labels = document.linked_proofs.map((proof) => proof.label);
+    if (labels.length === 1) {
+      return labels[0];
+    }
+
+    return `${labels.length} preuves liées : ${labels.join(", ")}`;
+  }
+
+  formatWorksiteProofDetail(proof: WorksiteProofRecord): string | null {
+    const uploadedLabel = this.formatCompactDate(proof.uploaded_at);
+    if (proof.notes && uploadedLabel) {
+      return `${uploadedLabel} · ${proof.notes}`;
+    }
+    if (proof.notes) {
+      return proof.notes;
+    }
+    return uploadedLabel;
   }
 
   getQuoteStatusLabel(status: QuoteStatus): string {
@@ -4615,6 +9085,147 @@ export class AppComponent implements DoCheck {
     }
   }
 
+  getDashboardActionPriorityLabel(priority: DashboardActionPriority): string {
+    switch (priority) {
+      case "high":
+        return "Haute";
+      case "medium":
+        return "Moyenne";
+      case "low":
+        return "Basse";
+    }
+  }
+
+  getDashboardActionPriorityTone(priority: DashboardActionPriority): CfmTone {
+    switch (priority) {
+      case "high":
+        return "warning";
+      case "medium":
+        return "progress";
+      case "low":
+        return "neutral";
+    }
+  }
+
+  getDashboardActionModuleLabel(module: DashboardActionModule): string {
+    switch (module) {
+      case "reglementation":
+        return "Réglementation";
+      case "chantier":
+        return "Chantier";
+      case "facturation":
+        return "Facturation";
+    }
+  }
+
+  getDashboardActionModuleTone(module: DashboardActionModule): CfmTone {
+    switch (module) {
+      case "reglementation":
+        return "calm";
+      case "chantier":
+        return "progress";
+      case "facturation":
+        return "neutral";
+    }
+  }
+
+  getBetaFeedbackCategoryLabel(category: BetaFeedbackCategory): string {
+    switch (category) {
+      case "blocking":
+        return "Bloquant";
+      case "unclear":
+        return "Incompréhension";
+      case "improvement":
+        return "Amélioration";
+      case "positive":
+        return "Retour positif";
+    }
+  }
+
+  getBetaFeedbackAreaLabel(area: BetaFeedbackArea): string {
+    switch (area) {
+      case "cockpit":
+        return "Cockpit";
+      case "worksite":
+        return "Chantier";
+      case "worksite_document":
+        return "Documents chantier";
+      case "facturation":
+        return "Facturation";
+      case "reglementation":
+        return "Réglementation";
+      case "sync":
+        return "Synchronisation visible";
+      case "other":
+        return "Autre";
+    }
+  }
+
+  private getDashboardActionPriorityRank(priority: DashboardActionPriority): number {
+    switch (priority) {
+      case "high":
+        return 1;
+      case "medium":
+        return 2;
+      case "low":
+        return 3;
+    }
+  }
+
+  private getDashboardOverviewSignalRank(label: string): number {
+    switch (label) {
+      case "À traiter":
+        return 1;
+      case "À suivre":
+        return 2;
+      default:
+        return 3;
+    }
+  }
+
+  private getCoordinationStatusRank(status: WorksiteCoordinationStatus): number {
+    switch (status) {
+      case "todo":
+        return 1;
+      case "in_progress":
+        return 2;
+      case "done":
+        return 3;
+    }
+  }
+
+  private formatDashboardDocumentSummary(label: string, entries: string[], emptyWord: string): string {
+    if (entries.length === 0) {
+      return `${label} : ${emptyWord}.`;
+    }
+
+    const preview = entries.slice(0, 2).join(", ");
+    const remaining = entries.length - 2;
+
+    if (remaining > 0) {
+      return `${label} : ${preview} + ${remaining} autre${remaining > 1 ? "s" : ""}.`;
+    }
+
+    return `${label} : ${preview}.`;
+  }
+
+  private formatCompactDate(value: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return new Intl.DateTimeFormat("fr-FR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(date);
+  }
+
   formatAmountCents(amountCents: number, currency = "EUR"): string {
     return new Intl.NumberFormat("fr-FR", {
       style: "currency",
@@ -4653,6 +9264,10 @@ export class AppComponent implements DoCheck {
       || value === "followed_up"
       || value === "waiting_customer"
     );
+  }
+
+  private mapCockpitTone(tone: CockpitTone): CfmTone {
+    return tone;
   }
 
   getBuildingSafetyTypeLabel(itemType: BuildingSafetyItemType): string {
@@ -4792,7 +9407,7 @@ export class AppComponent implements DoCheck {
       case "failed":
         return "À vérifier";
       case "archived":
-        return "Archivée";
+        return "Archivé";
     }
   }
 
@@ -4883,74 +9498,315 @@ export class AppComponent implements DoCheck {
       return;
     }
 
-    this.loading = true;
+    if (AppComponent.DISABLE_BOOTSTRAP_SESSION_RESTORE) {
+      return;
+    }
+
+    this.sessionRestoreInProgress = true;
     this.errorMessage = "";
     try {
       const session = await fetchSession(this.accessToken, organizationId);
       this.session = session;
       this.selectedOrganizationId = session.current_membership.organization.id;
       persistSession(this.accessToken, session);
-      await this.refreshOrganizationWorkspace();
+      await this.ensureAccessibleWorkspaceRoute();
     } catch (error) {
-      this.logout();
-      this.errorMessage = this.toErrorMessage(error);
+      const nextErrorMessage = this.toErrorMessage(error, "load");
+      this.errorMessage = nextErrorMessage;
+
+      const shouldClearAuth =
+        error instanceof ApiClientError
+        && (error.status === 401 || error.status === 403);
+
+      if (shouldClearAuth) {
+        this.clearAuthenticatedState(true, `session refresh failed with ${error.status}`);
+      }
+
+      if (shouldClearAuth && !this.shouldRenderLoginScreen) {
+        await this.router.navigateByUrl("/login");
+      }
     } finally {
-      this.loading = false;
+      this.sessionRestoreInProgress = false;
+    }
+  }
+
+  private clearScheduledWorkspaceRefresh(): void {
+    if (this.workspaceRefreshScheduledHandle !== null) {
+      globalThis.clearTimeout(this.workspaceRefreshScheduledHandle);
+      this.workspaceRefreshScheduledHandle = null;
+    }
+    this.workspaceRefreshScheduledOrganizationId = null;
+    this.workspaceRefreshScheduledReason = null;
+  }
+
+  private scheduleWorkspaceRefresh(reason: string): void {
+    if (AppComponent.WORKSPACE_LOADING_DISABLED) {
+      return;
+    }
+
+    const currentPath = this.router.url.split("#")[0] || "/login";
+    const organizationId = this.selectedOrganizationId;
+
+    if (!this.session || !organizationId || !this.isShellRoutePath(currentPath)) {
+      return;
+    }
+
+    if (this.workspaceHydratedOrganizationId === organizationId && this.hasWorkspaceContent) {
+      return;
+    }
+
+    if (this.workspaceRefreshInFlight) {
+      return;
+    }
+
+    if (this.workspaceRefreshScheduledOrganizationId === organizationId) {
+      return;
+    }
+
+    this.clearScheduledWorkspaceRefresh();
+    this.workspaceRefreshScheduledOrganizationId = organizationId;
+    this.workspaceRefreshScheduledReason = reason;
+
+    this.workspaceRefreshScheduledHandle = globalThis.setTimeout(() => {
+      const scheduledReason = this.workspaceRefreshScheduledReason ?? reason;
+      const scheduledOrganizationId = this.workspaceRefreshScheduledOrganizationId;
+      this.clearScheduledWorkspaceRefresh();
+
+      const activePath = this.router.url.split("#")[0] || "/login";
+      if (
+        !scheduledOrganizationId
+        || !this.session
+        || !this.selectedOrganizationId
+        || this.selectedOrganizationId !== scheduledOrganizationId
+        || !this.isShellRoutePath(activePath)
+      ) {
+        return;
+      }
+
+      void this.refreshOrganizationWorkspaceSafely(scheduledReason, scheduledOrganizationId);
+    }, 0);
+  }
+
+  private async resolveWorkspaceRequest<T>(label: string, requestFactory: () => Promise<T>, fallbackValue: T): Promise<T> {
+    try {
+      const payload = await requestFactory();
+      this.clearWorkspaceSegmentIssue(label);
+      return payload;
+    } catch (error) {
+      this.setWorkspaceSegmentIssue(label, this.toWorkspaceSegmentIssueMessage(label, error));
+      console.warn("[workspace] segment failed.", {
+        label,
+        organizationId: this.selectedOrganizationId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      return fallbackValue;
     }
   }
 
   private async refreshOrganizationWorkspace(): Promise<void> {
     if (!this.accessToken || !this.selectedOrganizationId) {
-      this.organizationProfile = null;
-      this.organizationSites = [];
-      this.regulatoryProfile = null;
-      this.billingCustomers = [];
-      this.billingWorksites = [];
-      this.quotes = [];
-      this.invoices = [];
-      this.buildingSafetyItems = [];
-      this.buildingSafetyAlerts = [];
-      this.duerpEntries = [];
-      this.regulatoryEvidences = [];
-      this.billingDraftsHydratedScope = null;
-      this.refreshBillingDraftSnapshots();
+      this.workspaceHydratedOrganizationId = null;
+      this.workspaceSegmentIssues = {};
+      this.resetWorkspaceState();
       return;
     }
 
+    if (AppComponent.WORKSPACE_LOADING_DISABLED) {
+      this.workspaceHydratedOrganizationId = null;
+      this.workspaceSegmentIssues = {};
+      this.organizationWorkspaceLoading = false;
+      this.resetWorkspaceState();
+      return;
+    }
+
+    if (this.workspaceHydratedOrganizationId !== this.selectedOrganizationId) {
+      this.workspaceSegmentIssues = {};
+    }
     this.organizationWorkspaceLoading = true;
     try {
       const billingEnabled = this.isFacturationEnabled;
-      const billingCustomersPromise = billingEnabled
-        ? listBillingCustomers(this.accessToken, this.selectedOrganizationId)
-        : Promise.resolve([] as BillingCustomerRecord[]);
-      const billingWorksitesPromise = billingEnabled
-        ? listWorksites(this.accessToken, this.selectedOrganizationId)
-        : Promise.resolve([] as WorksiteApiSummary[]);
-      const quotesPromise = billingEnabled
-        ? listQuotes(this.accessToken, this.selectedOrganizationId)
-        : Promise.resolve([] as QuoteRecord[]);
-      const invoicesPromise = billingEnabled
-        ? listInvoices(this.accessToken, this.selectedOrganizationId)
-        : Promise.resolve([] as InvoiceRecord[]);
+      const chantierEnabled = this.isChantierEnabled;
+      const regulationEnabled = this.isReglementationEnabled;
+      if (!regulationEnabled) {
+        this.clearWorkspaceSegmentIssue("building-safety-alerts");
+        this.clearWorkspaceSegmentIssue("duerp-entries");
+        this.clearWorkspaceSegmentIssue("regulatory-evidences");
+      }
+      const runWorkspaceRequest = <T>(label: string, requestFactory: () => Promise<T>, fallbackValue: T): Promise<T> =>
+        this.resolveWorkspaceRequest(label, requestFactory, fallbackValue);
+      const shouldLoadWorksites = billingEnabled || chantierEnabled;
+      const cockpitSummary = this.canReadOrganization
+        ? await runWorkspaceRequest(
+            "cockpit-summary",
+            () => fetchCockpitSummary(this.accessToken!, this.selectedOrganizationId!),
+            null as CockpitSummaryRecord | null
+          )
+        : null;
+      this.cockpitSummary = cockpitSummary;
 
-      const [profile, sites, regulatoryProfile, customers, worksites, quotes, invoices, buildingSafetyItems, buildingSafetyAlerts, duerpEntries, regulatoryEvidences] = await Promise.all([
-        fetchOrganizationProfile(this.accessToken, this.selectedOrganizationId),
-        listOrganizationSites(this.accessToken, this.selectedOrganizationId),
-        fetchOrganizationRegulatoryProfile(this.accessToken, this.selectedOrganizationId),
-        billingCustomersPromise,
-        billingWorksitesPromise,
-        quotesPromise,
-        invoicesPromise,
-        listBuildingSafetyItems(this.accessToken, this.selectedOrganizationId),
-        listBuildingSafetyAlerts(this.accessToken, this.selectedOrganizationId),
-        listDuerpEntries(this.accessToken, this.selectedOrganizationId),
-        listRegulatoryEvidences(this.accessToken, this.selectedOrganizationId)
-      ]);
+      const profile = await runWorkspaceRequest(
+        "organization-profile",
+        () => fetchOrganizationProfile(this.accessToken!, this.selectedOrganizationId!),
+        this.currentMembership?.organization ?? null
+      );
+      const sites = await runWorkspaceRequest(
+        "organization-sites",
+        () => listOrganizationSites(this.accessToken!, this.selectedOrganizationId!),
+        [] as OrganizationSiteRecord[]
+      );
+      const regulatoryProfile = regulationEnabled
+        ? await runWorkspaceRequest(
+            "regulatory-profile",
+            () => fetchOrganizationRegulatoryProfile(this.accessToken!, this.selectedOrganizationId!),
+            null as OrganizationRegulatoryProfileRecord | null
+          )
+        : null as OrganizationRegulatoryProfileRecord | null;
+      const buildingSafetyItems = regulationEnabled
+        ? await runWorkspaceRequest(
+            "building-safety-items",
+            () => listBuildingSafetyItems(this.accessToken!, this.selectedOrganizationId!),
+            [] as BuildingSafetyItemRecord[]
+          )
+        : [] as BuildingSafetyItemRecord[];
+      const buildingSafetyAlerts = regulationEnabled
+        ? await runWorkspaceRequest(
+            "building-safety-alerts",
+            () => listBuildingSafetyAlerts(this.accessToken!, this.selectedOrganizationId!),
+            [] as BuildingSafetyAlertRecord[]
+          )
+        : [] as BuildingSafetyAlertRecord[];
+      const duerpEntries = regulationEnabled
+        ? await runWorkspaceRequest(
+            "duerp-entries",
+            () => listDuerpEntries(this.accessToken!, this.selectedOrganizationId!),
+            [] as DuerpEntryRecord[]
+          )
+        : [] as DuerpEntryRecord[];
+      const regulatoryEvidences = regulationEnabled
+        ? await runWorkspaceRequest(
+            "regulatory-evidences",
+            () => listRegulatoryEvidences(this.accessToken!, this.selectedOrganizationId!),
+            [] as RegulatoryEvidenceRecord[]
+          )
+        : [] as RegulatoryEvidenceRecord[];
+      const customers = billingEnabled
+        ? await runWorkspaceRequest(
+            "billing-customers",
+            () => listBillingCustomers(this.accessToken!, this.selectedOrganizationId!),
+            [] as BillingCustomerRecord[]
+          )
+        : [] as BillingCustomerRecord[];
+      const worksites = shouldLoadWorksites
+        ? await runWorkspaceRequest(
+            "worksites",
+            () => listWorksites(this.accessToken!, this.selectedOrganizationId!),
+            [] as WorksiteApiSummary[]
+          )
+        : [] as WorksiteApiSummary[];
+      const worksiteDocuments = chantierEnabled
+        ? await runWorkspaceRequest(
+            "worksite-documents",
+            () => listWorksiteDocuments(this.accessToken!, this.selectedOrganizationId!),
+            [] as WorksiteDocumentRecord[]
+          )
+        : [] as WorksiteDocumentRecord[];
+      const worksiteProofs = chantierEnabled
+        ? await runWorkspaceRequest(
+            "worksite-proofs",
+            () => listWorksiteProofs(this.accessToken!, this.selectedOrganizationId!),
+            [] as WorksiteProofRecord[]
+          )
+        : [] as WorksiteProofRecord[];
+      const worksiteSignatures = chantierEnabled
+        ? await runWorkspaceRequest(
+            "worksite-signatures",
+            () => listWorksiteSignatures(this.accessToken!, this.selectedOrganizationId!),
+            [] as WorksiteSignatureRecord[]
+          )
+        : [] as WorksiteSignatureRecord[];
+      const worksiteAssignees = chantierEnabled && this.canReadUsers
+        ? await runWorkspaceRequest(
+            "worksite-assignees",
+            () => listWorksiteAssignees(this.accessToken!, this.selectedOrganizationId!),
+            [] as WorksiteAssigneeRecord[]
+          )
+        : [] as WorksiteAssigneeRecord[];
+      const quotes = billingEnabled
+        ? await runWorkspaceRequest(
+            "quotes",
+            () => listQuotes(this.accessToken!, this.selectedOrganizationId!),
+            [] as QuoteRecord[]
+          )
+        : [] as QuoteRecord[];
+      const invoices = billingEnabled
+        ? await runWorkspaceRequest(
+            "invoices",
+            () => listInvoices(this.accessToken!, this.selectedOrganizationId!),
+            [] as InvoiceRecord[]
+          )
+        : [] as InvoiceRecord[];
       this.organizationProfile = profile;
       this.organizationSites = this.sortSites(sites);
       this.regulatoryProfile = regulatoryProfile;
       this.billingCustomers = customers;
       this.billingWorksites = worksites;
+      this.worksiteDocuments = worksiteDocuments;
+      this.worksiteProofs = worksiteProofs;
+      this.worksiteSignatures = worksiteSignatures;
+      this.worksiteAssignees = worksiteAssignees;
+      if (
+        this.selectedCoordinationAssigneeFilter !== "all"
+        && this.selectedCoordinationAssigneeFilter !== "unassigned"
+        && !worksiteAssignees.some((assignee) => assignee.user_id === this.selectedCoordinationAssigneeFilter)
+      ) {
+        this.selectedCoordinationAssigneeFilter = "all";
+      }
+      this.worksiteCoordinationDrafts = chantierEnabled
+        ? Object.fromEntries(
+            worksites.map((worksite) => [worksite.id, this.buildCoordinationDraft(worksite.coordination)])
+          )
+        : {};
+      this.worksiteDocumentCoordinationDrafts = chantierEnabled
+        ? Object.fromEntries(
+            worksiteDocuments.map((document) => [document.id, this.buildCoordinationDraft(document.coordination)])
+          )
+        : {};
+      if (
+        this.selectedWorksiteCoordinationId
+        && !worksites.some((worksite) => worksite.id === this.selectedWorksiteCoordinationId)
+      ) {
+        this.selectedWorksiteCoordinationId = null;
+      }
+      if (!chantierEnabled) {
+        this.selectedWorksiteCoordinationId = null;
+        this.selectedCoordinationStatusFilter = "all";
+        this.selectedCoordinationAssigneeFilter = "all";
+      }
+      if (
+        this.selectedWorksiteDocumentDetailId
+        && !this.worksiteDocuments.some((document) => document.id === this.selectedWorksiteDocumentDetailId)
+      ) {
+        this.selectedWorksiteDocumentDetailId = null;
+      }
+      if (
+        this.selectedWorksiteDocumentFilterId !== "all"
+        && !worksites.some((worksite) => worksite.id === this.selectedWorksiteDocumentFilterId)
+      ) {
+        this.selectedWorksiteDocumentFilterId = "all";
+      }
+      this.worksiteDocumentDownloadBusyId = null;
+      this.worksiteDocumentPdfBusyId = null;
+      this.worksiteCoordinationBusyId = null;
+      this.worksiteDocumentCoordinationBusyId = null;
+      this.worksiteDocumentStatusBusyId = null;
+      this.worksitePreventionPlanPdfBusyId = null;
+      if (
+        this.worksitePreventionPlanEditingId
+        && !worksites.some((worksite) => worksite.id === this.worksitePreventionPlanEditingId)
+      ) {
+        this.cancelWorksitePreventionPlanEditing();
+      }
       this.quotes = quotes;
       this.invoices = invoices;
       this.quoteEditingId = null;
@@ -4959,19 +9815,31 @@ export class AppComponent implements DoCheck {
       this.invoiceEditingId = null;
       this.invoiceEditingSaving = false;
       this.invoiceFollowUpBusyId = null;
-      this.quoteHistoryOpenId = null;
-      this.quoteHistoryById = {};
-      this.invoiceHistoryOpenId = null;
-      this.invoiceHistoryById = {};
-      this.hydrateBillingDraftsIfNeeded(billingEnabled);
-      if (
-        this.selectedObligationId
-        && !regulatoryProfile.applicable_obligations.some((obligation) => obligation.id === this.selectedObligationId)
-      ) {
-        this.selectedObligationId = null;
+      if (this.quoteHistoryOpenId && !quotes.some((quote) => quote.id === this.quoteHistoryOpenId)) {
+        this.quoteHistoryOpenId = null;
       }
-      if (!this.selectedObligationId) {
-        this.selectedObligationId = regulatoryProfile.applicable_obligations[0]?.id ?? null;
+      this.quoteHistoryById = Object.fromEntries(
+        Object.entries(this.quoteHistoryById).filter(([quoteId]) => quotes.some((quote) => quote.id === quoteId))
+      );
+      if (this.invoiceHistoryOpenId && !invoices.some((invoice) => invoice.id === this.invoiceHistoryOpenId)) {
+        this.invoiceHistoryOpenId = null;
+      }
+      this.invoiceHistoryById = Object.fromEntries(
+        Object.entries(this.invoiceHistoryById).filter(([invoiceId]) => invoices.some((invoice) => invoice.id === invoiceId))
+      );
+      this.hydrateBillingDraftsIfNeeded(billingEnabled);
+      if (!regulationEnabled) {
+        this.selectedObligationId = null;
+      } else {
+        if (
+          this.selectedObligationId
+          && !regulatoryProfile?.applicable_obligations.some((obligation) => obligation.id === this.selectedObligationId)
+        ) {
+          this.selectedObligationId = null;
+        }
+        if (!this.selectedObligationId) {
+          this.selectedObligationId = regulatoryProfile?.applicable_obligations[0]?.id ?? null;
+        }
       }
       this.buildingSafetyItems = buildingSafetyItems;
       this.buildingSafetyAlerts = buildingSafetyAlerts;
@@ -5019,7 +9887,9 @@ export class AppComponent implements DoCheck {
       if (this.invoicePaymentId && !this.invoices.some((invoice) => invoice.id === this.invoicePaymentId)) {
         this.cancelInvoicePayment();
       }
-      if (
+      if (!regulationEnabled) {
+        this.resetRegulatoryEvidenceForm();
+      } else if (
         this.regulatoryEvidenceForm.linkKind === "obligation"
         && this.regulatoryProfile
         && !this.regulatoryProfile.applicable_obligations.some(
@@ -5029,12 +9899,15 @@ export class AppComponent implements DoCheck {
         this.regulatoryEvidenceForm.obligationId =
           this.regulatoryProfile.applicable_obligations[0]?.id ?? "";
       }
-      if (this.regulatoryEvidenceForm.linkKind === "site" && !this.regulatoryEvidenceForm.siteId) {
+      if (regulationEnabled && this.regulatoryEvidenceForm.linkKind === "site" && !this.regulatoryEvidenceForm.siteId) {
         this.regulatoryEvidenceForm.siteId = this.selectedSafetySiteId !== "all"
           ? this.selectedSafetySiteId
           : this.activeOrganizationSites[0]?.id ?? "";
       }
-      this.applyProfileToForm(profile);
+      if (profile) {
+        this.applyProfileToForm(profile);
+      }
+      this.workspaceHydratedOrganizationId = this.selectedOrganizationId;
       this.handleSiteFilterChange();
       this.refreshBillingDraftSnapshots();
     } finally {
@@ -5042,8 +9915,30 @@ export class AppComponent implements DoCheck {
     }
   }
 
+  private async refreshOrganizationWorkspaceSafely(reason: string, organizationId: string | null = this.selectedOrganizationId): Promise<void> {
+    if (this.workspaceRefreshInFlight) {
+      return this.workspaceRefreshInFlight;
+    }
+
+    let refreshPromise: Promise<void> | null = null;
+    refreshPromise = (async () => {
+      try {
+        await this.refreshOrganizationWorkspace();
+      } catch (error) {
+        this.errorMessage = this.toErrorMessage(error, "load");
+      } finally {
+        if (this.workspaceRefreshInFlight === refreshPromise) {
+          this.workspaceRefreshInFlight = null;
+        }
+      }
+    })();
+
+    this.workspaceRefreshInFlight = refreshPromise;
+    return refreshPromise;
+  }
+
   private async refreshRegulatoryProfile(): Promise<void> {
-    if (!this.accessToken || !this.selectedOrganizationId) {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.isReglementationEnabled) {
       this.regulatoryProfile = null;
       return;
     }
@@ -5055,7 +9950,7 @@ export class AppComponent implements DoCheck {
   }
 
   private async refreshBuildingSafetyState(): Promise<void> {
-    if (!this.accessToken || !this.selectedOrganizationId) {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.isReglementationEnabled) {
       this.buildingSafetyItems = [];
       this.buildingSafetyAlerts = [];
       return;
@@ -5408,6 +10303,149 @@ export class AppComponent implements DoCheck {
     return Boolean(worksiteId && this.billingWorksites.some((worksite) => worksite.id === worksiteId));
   }
 
+  private findBillingCustomerByName(name: string | null | undefined): BillingCustomerRecord | null {
+    const query = this.toSearchableText(name);
+    if (!query) {
+      return null;
+    }
+
+    return this.billingCustomers.find((customer) => this.toSearchableText(customer.name) === query) ?? null;
+  }
+
+  private findSingleWorksiteForCustomer(customerName: string | null | undefined): WorksiteApiSummary | null {
+    const query = this.toSearchableText(customerName);
+    if (!query) {
+      return null;
+    }
+
+    const matchingWorksites = this.billingWorksites.filter(
+      (worksite) => this.toSearchableText(worksite.client_name) === query
+    );
+    return matchingWorksites.length === 1 ? matchingWorksites[0] : null;
+  }
+
+  private buildWorksitePreventionPlanForm(worksite: WorksiteApiSummary): WorksitePreventionPlanForm {
+    const matchedCustomer = this.findBillingCustomerByName(worksite.client_name);
+    const usefulDate = this.toDateTimeLocalValue(worksite.planned_for);
+
+    return {
+      usefulDate,
+      interventionContext: this.buildDefaultWorksitePreventionContext(
+        worksite,
+        matchedCustomer,
+        this.formatDateTimeForHumans(usefulDate)
+      ),
+      vigilancePoints: this.buildDefaultWorksiteVigilancePoints(worksite, matchedCustomer).join("\n"),
+      measurePoints: this.buildDefaultWorksiteMeasurePoints(
+        worksite,
+        matchedCustomer,
+        this.formatDateTimeForHumans(usefulDate)
+      ).join("\n"),
+      additionalContact: "",
+    };
+  }
+
+  private cloneWorksitePreventionPlanForm(form: WorksitePreventionPlanForm): WorksitePreventionPlanForm {
+    return {
+      usefulDate: form.usefulDate,
+      interventionContext: form.interventionContext,
+      vigilancePoints: form.vigilancePoints,
+      measurePoints: form.measurePoints,
+      additionalContact: form.additionalContact,
+    };
+  }
+
+  private buildWorksitePreventionPlanPreview(worksite: WorksiteApiSummary): WorksitePreventionPlanPreview {
+    return {
+      companyName:
+        this.normalizeOptionalText(this.organizationProfile?.legal_name ?? "")
+        ?? this.normalizeOptionalText(this.organizationProfile?.name ?? "")
+        ?? this.currentMembership?.organization.name
+        ?? "Entreprise",
+      worksiteName: worksite.name,
+      worksiteAddress: worksite.address,
+      clientName: this.normalizeOptionalText(worksite.client_name),
+      usefulDateLabel: this.formatDateTimeForHumans(this.worksitePreventionPlanForm.usefulDate),
+      interventionContext:
+        this.normalizeOptionalText(this.worksitePreventionPlanForm.interventionContext)
+        ?? "Contexte à compléter avant export.",
+      vigilancePoints: this.splitMultilineItems(this.worksitePreventionPlanForm.vigilancePoints),
+      measurePoints: this.splitMultilineItems(this.worksitePreventionPlanForm.measurePoints),
+      additionalContact: this.normalizeOptionalText(this.worksitePreventionPlanForm.additionalContact),
+    };
+  }
+
+  private buildDefaultWorksitePreventionContext(
+    worksite: WorksiteApiSummary,
+    customer: BillingCustomerRecord | null,
+    usefulDateLabel: string | null,
+  ): string {
+    const customerName = customer?.name || worksite.client_name;
+    const parts = [
+      `Intervention préparée sur le chantier ${worksite.name}`,
+      `pour ${customerName}`,
+      `à l'adresse ${worksite.address}`,
+    ];
+    if (usefulDateLabel) {
+      parts.push(`avec un repère de date au ${usefulDateLabel}`);
+    }
+    return `${parts.join(" ")}.`;
+  }
+
+  private buildDefaultWorksiteVigilancePoints(
+    worksite: WorksiteApiSummary,
+    customer: BillingCustomerRecord | null,
+  ): string[] {
+    const points = [
+      "Accès au site, accueil et zones d'intervention à confirmer avant le démarrage.",
+      "Coactivité possible avec occupants, clients ou autres prestataires présents sur place.",
+      "Circulation, manutention et balisage autour de la zone de travail à préparer simplement.",
+    ];
+
+    if (worksite.status === "blocked") {
+      points.push("Un point bloquant est déjà remonté sur ce chantier et doit être levé avant intervention.");
+    } else if (worksite.status === "in_progress") {
+      points.push("Le chantier est déjà en cours et demande une coordination simple avec les intervenants présents.");
+    } else if (worksite.status === "planned") {
+      points.push("Les accès, badges ou autorisations utiles peuvent être vérifiés avant l'arrivée sur site.");
+    }
+
+    if (customer && (customer.email || customer.phone)) {
+      points.push("Un contact donneur d'ordre est disponible et peut être confirmé avant intervention.");
+    }
+
+    return points;
+  }
+
+  private buildDefaultWorksiteMeasurePoints(
+    worksite: WorksiteApiSummary,
+    customer: BillingCustomerRecord | null,
+    usefulDateLabel: string | null,
+  ): string[] {
+    const points = [
+      "Présenter l'intervention et le périmètre concerné au contact du site avant de commencer.",
+      "Vérifier les accès, les autorisations et les équipements de protection utiles à l'intervention.",
+      "Baliser la zone de travail et maintenir un cheminement sûr pour les tiers.",
+      "Arrêter l'intervention et faire remonter tout risque non prévu ou toute consigne contradictoire.",
+    ];
+
+    if (usefulDateLabel) {
+      points.push(`Confirmer simplement l'accueil et l'accès au chantier pour la date utile du ${usefulDateLabel}.`);
+    }
+    if (customer && (customer.email || customer.phone)) {
+      points.push("Utiliser les coordonnées disponibles pour confirmer l'accueil avant l'arrivée sur site.");
+    }
+
+    return points;
+  }
+
+  private splitMultilineItems(value: string): string[] {
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+  }
+
   private toSearchableText(value: string | null | undefined): string {
     return (value ?? "")
       .normalize("NFD")
@@ -5416,8 +10454,540 @@ export class AppComponent implements DoCheck {
       .trim();
   }
 
-  private toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : "Une erreur inconnue est survenue.";
+  private toDateTimeLocalValue(value: string | null): string {
+    if (!value) {
+      return "";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+    const hours = `${date.getHours()}`.padStart(2, "0");
+    const minutes = `${date.getMinutes()}`.padStart(2, "0");
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  }
+
+  private formatDateTimeForHumans(value: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return new Intl.DateTimeFormat("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  private scrollToDesktopSection(sectionId: string): void {
+    globalThis.document?.getElementById(sectionId)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  private async navigateToWorkspaceRoute(route: string, sectionId?: string): Promise<void> {
+    await this.router.navigateByUrl(sectionId ? `${route}#${sectionId}` : route);
+    if (sectionId && !AppComponent.DISABLE_DEFERRED_WORKSPACE_SCROLL) {
+      globalThis.setTimeout(() => this.scrollToDesktopSection(sectionId), 30);
+    }
+  }
+
+  private async handleRouteChange(): Promise<void> {
+    let currentPath = this.router.url.split("#")[0] || "/login";
+    const storedAccessToken = getStoredAccessToken();
+    const storedOrganizationId = getStoredOrganizationId();
+
+    if (!storedAccessToken && (this.accessToken || this.session)) {
+      console.warn("[auth] in-memory session detected without persisted token. Clearing shell state.", {
+        currentPath,
+        hadAccessTokenInMemory: Boolean(this.accessToken),
+        hadSessionInMemory: Boolean(this.session),
+      });
+      this.clearAuthenticatedState(false);
+    } else {
+      this.accessToken = storedAccessToken;
+      this.selectedOrganizationId = storedOrganizationId;
+    }
+
+    if (this.isLoginRoutePath(currentPath)) {
+      this.clearScheduledWorkspaceRefresh();
+      this.organizationWorkspaceLoading = false;
+      return;
+    }
+
+    if (!this.isShellRoutePath(currentPath)) {
+      this.clearScheduledWorkspaceRefresh();
+      return;
+    }
+
+    if (!this.accessToken) {
+      console.warn("[auth] protected shell route requested without persisted token. Redirecting to login.", {
+        currentPath,
+      });
+      await this.router.navigate(["/login"], { replaceUrl: true });
+      return;
+    }
+
+    if (!this.session && !this.sessionRestoreInProgress) {
+      if (AppComponent.DISABLE_BOOTSTRAP_SESSION_RESTORE) {
+        this.organizationWorkspaceLoading = false;
+        await this.ensureAccessibleWorkspaceRoute();
+        return;
+      }
+
+      await this.refreshSession(this.selectedOrganizationId);
+      currentPath = this.router.url.split("#")[0] || "/login";
+      if (!this.session || !this.isShellRoutePath(currentPath)) {
+        return;
+      }
+    }
+
+    if (this.session) {
+      if (AppComponent.WORKSPACE_LOADING_DISABLED) {
+        this.organizationWorkspaceLoading = false;
+        await this.ensureAccessibleWorkspaceRoute();
+        return;
+      }
+
+      if (!this.organizationWorkspaceLoading && !this.isWorkspaceHydratedForCurrentOrganization) {
+        this.scheduleWorkspaceRefresh("route change");
+      }
+      await this.ensureAccessibleWorkspaceRoute();
+    }
+  }
+
+  private resetWorkspaceState(): void {
+    this.cockpitSummary = null;
+    this.organizationProfile = null;
+    this.organizationSites = [];
+    this.regulatoryProfile = null;
+    this.billingCustomers = [];
+    this.billingWorksites = [];
+    this.worksiteDocuments = [];
+    this.worksiteProofs = [];
+    this.worksiteSignatures = [];
+    this.worksiteAssignees = [];
+    this.selectedWorksiteCoordinationId = null;
+    this.selectedCoordinationStatusFilter = "all";
+    this.selectedCoordinationAssigneeFilter = "all";
+    this.selectedWorksiteDocumentFilterId = "all";
+    this.selectedWorksiteDocumentTypeFilter = "all";
+    this.selectedWorksiteDocumentLifecycleFilter = "all";
+    this.selectedWorksiteDocumentDetailId = null;
+    this.worksiteDocumentDownloadBusyId = null;
+    this.worksiteDocumentPdfBusyId = null;
+    this.worksiteCoordinationBusyId = null;
+    this.worksiteDocumentCoordinationBusyId = null;
+    this.worksiteDocumentStatusBusyId = null;
+    this.worksiteDocumentProofBusyId = null;
+    this.worksiteDocumentSignatureBusyId = null;
+    this.worksitePreventionPlanPdfBusyId = null;
+    this.worksitePreventionPlanEditingId = null;
+    this.worksiteCoordinationDrafts = {};
+    this.worksiteDocumentCoordinationDrafts = {};
+    this.quotes = [];
+    this.invoices = [];
+    this.buildingSafetyItems = [];
+    this.buildingSafetyAlerts = [];
+    this.duerpEntries = [];
+    this.regulatoryEvidences = [];
+    this.billingDraftsHydratedScope = null;
+    this.refreshBillingDraftSnapshots();
+  }
+
+  private clearWorkspaceSegmentIssue(label: string): void {
+    if (!(label in this.workspaceSegmentIssues)) {
+      return;
+    }
+
+    const remainingIssues = { ...this.workspaceSegmentIssues };
+    delete remainingIssues[label];
+    this.workspaceSegmentIssues = remainingIssues;
+  }
+
+  private setWorkspaceSegmentIssue(label: string, message: string | null): void {
+    if (!message) {
+      this.clearWorkspaceSegmentIssue(label);
+      return;
+    }
+
+    this.workspaceSegmentIssues = {
+      ...this.workspaceSegmentIssues,
+      [label]: message,
+    };
+  }
+
+  private toWorkspaceSegmentIssueMessage(label: string, error: unknown): string | null {
+    if (
+      label !== "building-safety-alerts"
+      && label !== "duerp-entries"
+      && label !== "regulatory-evidences"
+    ) {
+      return null;
+    }
+
+    if (error instanceof ApiClientError) {
+      if (error.status === 408 || error.status === 0 || (error.status !== null && error.status >= 500)) {
+        return "Les données réglementaires mettent plus de temps à remonter. Le reste du cockpit reste disponible.";
+      }
+      return error.detail;
+    }
+
+    return "Les données réglementaires mettent plus de temps à remonter. Le reste du cockpit reste disponible.";
+  }
+
+  private async ensureAccessibleWorkspaceRoute(): Promise<void> {
+    const currentPath = this.router.url.split("#")[0] || "/app/home";
+    const nextPath =
+      currentPath === "/" || !currentPath.startsWith("/app/")
+        ? "/app/home"
+        : currentPath.startsWith("/app/reglementation") && !this.isReglementationEnabled
+          ? "/app/home"
+          : currentPath.startsWith("/app/facturation") && !this.isFacturationEnabled
+            ? "/app/home"
+            : currentPath.startsWith("/app/chantier") && !this.isChantierEnabled
+              ? "/app/home"
+              : currentPath;
+
+    if (nextPath !== currentPath) {
+      await this.router.navigateByUrl(nextPath);
+    }
+  }
+
+  private isLoginRoutePath(path: string): boolean {
+    return !path.startsWith("/app/");
+  }
+
+  private isShellRoutePath(path: string): boolean {
+    return path.startsWith("/app/");
+  }
+
+  private clearAuthenticatedState(clearStoredSession: boolean = true, reason = "app state reset"): void {
+    if (clearStoredSession) {
+      clearSession(reason);
+    }
+
+    this.clearScheduledWorkspaceRefresh();
+    this.workspaceHydratedOrganizationId = null;
+    this.workspaceSegmentIssues = {};
+    this.accessToken = null;
+    this.selectedOrganizationId = null;
+    this.session = null;
+    this.loading = false;
+    this.organizationWorkspaceLoading = false;
+    this.sessionRestoreInProgress = false;
+    this.resetBetaFeedback();
+    this.regulatoryExporting = false;
+    this.cockpitSummary = null;
+    this.organizationProfile = null;
+    this.organizationSites = [];
+    this.regulatoryProfile = null;
+    this.selectedObligationId = null;
+    this.billingCustomers = [];
+    this.billingWorksites = [];
+    this.worksiteDocuments = [];
+    this.worksiteProofs = [];
+    this.worksiteSignatures = [];
+    this.worksiteAssignees = [];
+    this.selectedWorksiteCoordinationId = null;
+    this.selectedCoordinationStatusFilter = "all";
+    this.selectedCoordinationAssigneeFilter = "all";
+    this.selectedWorksiteDocumentFilterId = "all";
+    this.selectedWorksiteDocumentTypeFilter = "all";
+    this.selectedWorksiteDocumentLifecycleFilter = "all";
+    this.selectedWorksiteDocumentDetailId = null;
+    this.worksiteDocumentDownloadBusyId = null;
+    this.worksiteDocumentPdfBusyId = null;
+    this.worksiteCoordinationBusyId = null;
+    this.worksiteDocumentCoordinationBusyId = null;
+    this.worksiteDocumentStatusBusyId = null;
+    this.worksiteDocumentProofBusyId = null;
+    this.worksiteDocumentSignatureBusyId = null;
+    this.worksitePreventionPlanPdfBusyId = null;
+    this.worksitePreventionPlanEditingId = null;
+    this.worksiteCoordinationDrafts = {};
+    this.worksiteDocumentCoordinationDrafts = {};
+    this.quotes = [];
+    this.invoices = [];
+    this.quoteEditingId = null;
+    this.quoteEditingSaving = false;
+    this.quoteStatusBusyId = null;
+    this.quoteFollowUpBusyId = null;
+    this.quoteWorksiteBusyId = null;
+    this.quoteDuplicateBusyId = null;
+    this.quotePdfBusyId = null;
+    this.quoteHistoryBusyId = null;
+    this.quoteHistoryOpenId = null;
+    this.quoteHistoryById = {};
+    this.invoiceEditingId = null;
+    this.invoiceEditingSaving = false;
+    this.invoiceStatusBusyId = null;
+    this.invoiceFollowUpBusyId = null;
+    this.invoicePaymentBusyId = null;
+    this.invoicePaymentId = null;
+    this.invoiceWorksiteBusyId = null;
+    this.invoicePdfBusyId = null;
+    this.invoiceHistoryBusyId = null;
+    this.invoiceHistoryOpenId = null;
+    this.invoiceHistoryById = {};
+    this.buildingSafetyItems = [];
+    this.buildingSafetyAlerts = [];
+    this.duerpEntries = [];
+    this.regulatoryEvidences = [];
+    this.buildingSafetyEditingId = null;
+    this.duerpEditingId = null;
+    this.selectedSafetySiteId = "all";
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    this.resetCustomerForm();
+    this.resetQuoteForm();
+    this.resetInvoiceForm();
+    this.resetWorksitePreventionPlanForm();
+    this.resetInvoicePaymentForm();
+    this.resetBuildingSafetyForm();
+    this.resetDuerpForm();
+    this.resetRegulatoryEvidenceForm();
+    this.billingDraftsHydratedScope = null;
+    this.refreshBillingDraftSnapshots();
+  }
+
+  private isModuleDataPending(moduleCode: ModuleCode): boolean {
+    return this.activeSessionModules.includes(moduleCode) && !this.isWorkspaceHydratedForCurrentOrganization;
+  }
+
+  private buildBetaFeedbackPayload(): string {
+    const organizationName = this.currentMembership?.organization.name ?? "Organisation à préciser";
+    const authorLabel =
+      this.session?.user.display_name
+      || this.session?.user.email
+      || "Utilisateur à préciser";
+    const capturedAt = new Intl.DateTimeFormat("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date());
+
+    return [
+      "Retour beta Conforméo",
+      `Organisation : ${organizationName}`,
+      `Auteur : ${authorLabel}`,
+      `Date : ${capturedAt}`,
+      `Type : ${this.getBetaFeedbackCategoryLabel(this.betaFeedbackCategory)}`,
+      `Zone : ${this.getBetaFeedbackAreaLabel(this.betaFeedbackArea)}`,
+      "",
+      "Message :",
+      this.betaFeedbackMessageText.trim(),
+    ].join("\n");
+  }
+
+  private async copyTextToClipboard(value: string): Promise<void> {
+    if (globalThis.navigator?.clipboard?.writeText) {
+      await globalThis.navigator.clipboard.writeText(value);
+      return;
+    }
+
+    const documentRef = globalThis.document;
+    if (!documentRef) {
+      throw new Error("clipboard_unavailable");
+    }
+
+    const textarea = documentRef.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    documentRef.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const success = documentRef.execCommand("copy");
+    documentRef.body.removeChild(textarea);
+
+    if (!success) {
+      throw new Error("clipboard_unavailable");
+    }
+  }
+
+  private toErrorMessage(error: unknown, context: UserErrorContext = "generic"): string {
+    if (error instanceof ApiClientError) {
+      return this.toApiClientErrorMessage(error, context);
+    }
+
+    if (error instanceof Error) {
+      if (this.isLikelyNetworkErrorMessage(error.message)) {
+        return this.getNetworkErrorMessage(context);
+      }
+      if (this.isUserFacingErrorMessage(error.message)) {
+        return error.message;
+      }
+    }
+
+    return this.getDefaultErrorMessage(context);
+  }
+
+  private toApiClientErrorMessage(error: ApiClientError, context: UserErrorContext): string {
+    const detail = error.detail.trim();
+    const normalizedDetail = detail.toLowerCase();
+
+    if (normalizedDetail.includes("not authenticated") || normalizedDetail.includes("invalid token")) {
+      return "Votre session a expiré. Reconnectez-vous pour continuer.";
+    }
+
+    if (
+      normalizedDetail.includes("invalid credentials")
+      || normalizedDetail.includes("incorrect email")
+      || normalizedDetail.includes("incorrect password")
+    ) {
+      return "Connexion refusée. Vérifiez votre email et votre mot de passe.";
+    }
+
+    if (
+      normalizedDetail.includes("module")
+      && (normalizedDetail.includes("disabled") || normalizedDetail.includes("not enabled"))
+    ) {
+      return "Ce module n'est pas activé pour cette organisation.";
+    }
+
+    switch (error.status) {
+      case 400:
+      case 409:
+      case 422:
+        return this.isUserFacingErrorMessage(detail)
+          ? detail
+          : this.getValidationErrorMessage(context);
+      case 401:
+        return context === "auth"
+          ? "Connexion refusée. Vérifiez votre email et votre mot de passe."
+          : "Votre session a expiré. Reconnectez-vous pour continuer.";
+      case 403:
+        return "Vous n'avez pas accès à cette action pour le moment.";
+      case 404:
+        return context === "load"
+          ? "Les données demandées ne sont plus disponibles. Rechargez l'espace puis réessayez."
+          : "L'élément demandé est introuvable ou n'est plus disponible.";
+      default:
+        if (typeof error.status === "number" && error.status >= 500) {
+          return this.getTemporaryUnavailableMessage(context);
+        }
+        return this.isUserFacingErrorMessage(detail)
+          ? detail
+          : this.getDefaultErrorMessage(context);
+    }
+  }
+
+  private isLikelyNetworkErrorMessage(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes("failed to fetch")
+      || normalized.includes("networkerror")
+      || normalized.includes("load failed")
+      || normalized.includes("network request failed")
+      || normalized.includes("fetch failed")
+    );
+  }
+
+  private isUserFacingErrorMessage(message: string): boolean {
+    const trimmed = message.trim();
+    if (!trimmed || trimmed.length > 220) {
+      return false;
+    }
+
+    return ![
+      "traceback",
+      "sqlalchemy",
+      "asyncpg",
+      "internal server error",
+      "exception",
+      "stack",
+      "syntaxerror",
+      "typeerror",
+      "referenceerror",
+      "constraint",
+      "violates",
+      "enum",
+      "uuid",
+      "failed to fetch",
+      "networkerror",
+      "fetch failed",
+    ].some((token) => trimmed.toLowerCase().includes(token));
+  }
+
+  private getDefaultErrorMessage(context: UserErrorContext): string {
+    switch (context) {
+      case "auth":
+        return "Connexion impossible pour le moment. Réessayez dans un instant.";
+      case "load":
+        return "Les données n'ont pas pu être chargées pour le moment. Réessayez dans un instant.";
+      case "save":
+        return "L'enregistrement n'a pas pu être confirmé. Réessayez dans un instant.";
+      case "update":
+        return "La mise à jour n'a pas pu être enregistrée. Réessayez dans un instant.";
+      case "export":
+        return "Le document n'a pas pu être préparé pour le moment. Réessayez dans un instant.";
+      default:
+        return "Une erreur est survenue. Réessayez dans un instant.";
+    }
+  }
+
+  private getValidationErrorMessage(context: UserErrorContext): string {
+    switch (context) {
+      case "save":
+      case "update":
+        return "Vérifiez les informations saisies puis réessayez.";
+      case "export":
+        return "Le document n'a pas pu être préparé avec ces informations. Vérifiez les champs puis réessayez.";
+      case "auth":
+        return "Connexion refusée. Vérifiez vos identifiants puis réessayez.";
+      default:
+        return "Vérifiez les informations puis réessayez.";
+    }
+  }
+
+  private getNetworkErrorMessage(context: UserErrorContext): string {
+    switch (context) {
+      case "load":
+        return "Impossible de charger les données pour le moment. Vérifiez la connexion puis réessayez.";
+      case "save":
+      case "update":
+        return "La connexion a été interrompue. Vérifiez le réseau puis réessayez.";
+      case "export":
+        return "Le téléchargement n'a pas abouti. Vérifiez la connexion puis réessayez.";
+      case "auth":
+        return "Connexion impossible pour le moment. Vérifiez la connexion puis réessayez.";
+      default:
+        return "Connexion impossible pour le moment. Vérifiez le réseau puis réessayez.";
+    }
+  }
+
+  private getTemporaryUnavailableMessage(context: UserErrorContext): string {
+    switch (context) {
+      case "load":
+        return "Les données ne sont pas disponibles pour le moment. Réessayez dans un instant.";
+      case "save":
+      case "update":
+        return "L'action n'a pas pu être enregistrée pour le moment. Réessayez dans un instant.";
+      case "export":
+        return "Le document n'a pas pu être généré pour le moment. Réessayez dans un instant.";
+      case "auth":
+        return "Le service de connexion est temporairement indisponible. Réessayez dans un instant.";
+      default:
+        return "Le service est temporairement indisponible. Réessayez dans un instant.";
+    }
   }
 
   private downloadBlob(blob: Blob, fileName: string): void {
@@ -5456,6 +11026,16 @@ export class AppComponent implements DoCheck {
       status: "draft",
       notes: "",
       lines: [this.createEmptyBillingLineForm()],
+    };
+  }
+
+  private createEmptyWorksitePreventionPlanForm(): WorksitePreventionPlanForm {
+    return {
+      usefulDate: "",
+      interventionContext: "",
+      vigilancePoints: "",
+      measurePoints: "",
+      additionalContact: "",
     };
   }
 
@@ -5582,6 +11162,11 @@ export class AppComponent implements DoCheck {
 
   private resetInvoiceForm(): void {
     this.invoiceForm = this.createEmptyInvoiceForm();
+  }
+
+  private resetWorksitePreventionPlanForm(): void {
+    this.worksitePreventionPlanForm = this.createEmptyWorksitePreventionPlanForm();
+    this.worksitePreventionPlanInitialForm = null;
   }
 
   private resetInvoicePaymentForm(): void {

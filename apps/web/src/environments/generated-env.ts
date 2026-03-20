@@ -5,5 +5,5 @@ export type FrontendAppEnv = "development" | "staging" | "production";
 
 export const generatedEnv = {
   "appEnv": "development",
-  "apiBaseUrl": "http://localhost:8000"
+  "apiBaseUrl": "http://127.0.0.1:8000"
 } as const;

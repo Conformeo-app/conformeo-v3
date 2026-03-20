@@ -5,6 +5,7 @@ export * from "./billing-follow-up";
 export * from "./billing-line";
 export * from "./building-safety";
 export * from "./compliance";
+export * from "./cockpit";
 export * from "./common";
 export * from "./document";
 export * from "./duerp";
