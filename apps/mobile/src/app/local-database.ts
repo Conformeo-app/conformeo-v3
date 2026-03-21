@@ -6,6 +6,7 @@ import {
 } from "@capacitor-community/sqlite";
 import type {
   WorksiteApiSummary,
+  WorksiteCoordinationRecord,
   WorksiteEquipment,
   WorksiteEquipmentMovement,
   WorksiteEquipmentMovementType,
@@ -127,6 +128,18 @@ function computeRetryAt(attempts: number, maxAttempts: number): string | null {
 
   const boundedDelayMinutes = Math.min(2 ** Math.max(attempts - 1, 0), 15);
   return addMinutes(new Date(), boundedDelayMinutes);
+}
+
+function createDefaultWorksiteCoordination(worksiteId: string): WorksiteCoordinationRecord {
+  return {
+    target_type: "worksite",
+    target_id: worksiteId,
+    status: "todo",
+    assignee_user_id: null,
+    assignee_display_name: null,
+    comment_text: null,
+    updated_at: null
+  };
 }
 
 function parsePayload(value: unknown): Record<string, unknown> {
@@ -1873,7 +1886,11 @@ class MobileLocalDatabase {
       is_offline_ready: payload.is_offline_ready === true,
       offline_prepared_at:
         typeof payload.offline_prepared_at === "string" ? payload.offline_prepared_at : null,
-      updated_at: typeof payload.updated_at === "string" ? payload.updated_at : record.updatedAt
+      updated_at: typeof payload.updated_at === "string" ? payload.updated_at : record.updatedAt,
+      coordination:
+        payload.coordination && typeof payload.coordination === "object" && !Array.isArray(payload.coordination)
+          ? (payload.coordination as WorksiteCoordinationRecord)
+          : createDefaultWorksiteCoordination(id)
     };
   }
 

@@ -18,33 +18,40 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
   template: `
     <section class="workspace-body">
       <cfm-card
-        class="desktop-card"
+        class="desktop-card home-section-card home-section-card--kpis"
         eyebrow="Cockpit"
-        title="Repères essentiels"
-        description="Une reprise légère de la home pour valider le rendu du cockpit sans réactiver encore les vues d’ensemble et les listes détaillées."
+        title="Pilotage du jour"
+        description="Les points à surveiller maintenant."
       >
         <div class="hero-line">
           <div class="hero-copy">
-            <h3>{{ ctx.currentMembership?.organization.name ?? 'Organisation' }}</h3>
             <p class="small">
-              Les KPI et alertes simples du cockpit sont réactivés. Les vues d’ensemble et listes détaillées restent encore coupées.
+              Priorités, alertes et modules à suivre.
             </p>
           </div>
 
           <div class="hero-chips">
-            <cfm-status-chip
-              [label]="ctx.dashboardKpis.length + ' repère' + (ctx.dashboardKpis.length > 1 ? 's' : '')"
-              [tone]="ctx.dashboardKpis.length > 0 ? 'calm' : 'neutral'"
-            />
-            <cfm-status-chip
-              [label]="ctx.isWorkspaceRefreshing ? 'Mise à jour en cours' : 'Workspace prêt'"
-              [tone]="ctx.isWorkspaceRefreshing ? 'progress' : 'success'"
-            />
+            <div class="hero-chip-primary">
+              <cfm-status-chip
+                [label]="ctx.isWorkspaceRefreshing ? 'Mise à jour en cours' : 'Workspace prêt'"
+                [tone]="ctx.isWorkspaceRefreshing ? 'progress' : 'success'"
+              />
+            </div>
+            <div class="hero-chip-secondary">
+              <cfm-status-chip
+                [label]="ctx.dashboardKpis.length + ' repère' + (ctx.dashboardKpis.length > 1 ? 's' : '')"
+                [tone]="ctx.dashboardKpis.length > 0 ? 'calm' : 'neutral'"
+              />
+            </div>
           </div>
         </div>
 
-        <div class="dashboard-grid" *ngIf="ctx.dashboardKpis.length > 0; else emptyKpis">
-          <article class="dashboard-kpi-card" *ngFor="let kpi of ctx.dashboardKpis">
+        <div class="dashboard-grid dashboard-grid--kpis" *ngIf="ctx.dashboardKpis.length > 0; else emptyKpis">
+          <article
+            class="dashboard-kpi-card"
+            *ngFor="let kpi of ctx.dashboardKpis"
+            [class.dashboard-kpi-card--attention]="kpi.tone === 'warning' || kpi.tone === 'critical'"
+          >
             <p class="small">{{ kpi.label }}</p>
             <strong>{{ kpi.value }}</strong>
             <p>{{ kpi.detail }}</p>
@@ -53,22 +60,26 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         </div>
 
         <ng-template #emptyKpis>
-          <div class="empty-copy">
-            <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-              Les repères du cockpit sont en train d’être préparés.
+          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+            <p class="state-title">
+              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun repère pour le moment" }}
             </p>
-            <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-              Aucun repère cockpit n’est encore disponible.
+            <p class="small">
+              {{
+                ctx.isWorkspaceRefreshing
+                  ? "Les repères du cockpit arrivent."
+                  : "Le cockpit affichera ici les points utiles à suivre."
+              }}
             </p>
           </div>
         </ng-template>
       </cfm-card>
 
       <cfm-card
-        class="desktop-card"
+        class="desktop-card home-section-card home-section-card--alerts"
         eyebrow="Priorités"
-        title="Alertes simples"
-        description="Un deuxième palier de la home pour valider le rendu des priorités sans encore réactiver les autres blocs."
+        title="Actions prioritaires"
+        description="Ce qui demande une action maintenant."
       >
         <div class="hero-chips">
           <cfm-status-chip
@@ -92,24 +103,28 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         </ul>
 
         <ng-template #emptyAlerts>
-          <div class="empty-copy">
-            <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-              Les alertes du cockpit sont en train d’être préparées.
+          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+            <p class="state-title">
+              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucune priorité critique" }}
             </p>
-            <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-              Aucune alerte simple n’est remontée pour le moment.
+            <p class="small">
+              {{
+                ctx.isWorkspaceRefreshing
+                  ? "Les alertes utiles se préparent."
+                  : "Rien d’urgent pour le moment."
+              }}
             </p>
           </div>
         </ng-template>
       </cfm-card>
 
       <cfm-card
-        class="desktop-card"
+        class="desktop-card home-section-card home-section-card--overview"
         eyebrow="Vue d’ensemble"
         title="Repères par module"
-        description="Le troisième palier de la home remet les cartes d’ensemble, sans encore réactiver les listes détaillées chantier et clients."
+        description="Lecture rapide des modules."
       >
-        <div class="dashboard-grid" *ngIf="ctx.dashboardEnterpriseOverviewCards.length > 0; else emptyOverview">
+        <div class="dashboard-grid dashboard-grid--overview" *ngIf="ctx.dashboardEnterpriseOverviewCards.length > 0; else emptyOverview">
           <article class="dashboard-kpi-card dashboard-overview-card" *ngFor="let card of ctx.dashboardEnterpriseOverviewCards">
             <p class="small">{{ card.label }}</p>
             <strong class="overview-headline">{{ card.headline }}</strong>
@@ -127,22 +142,26 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         </div>
 
         <ng-template #emptyOverview>
-          <div class="empty-copy">
-            <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-              Les cartes d’ensemble sont en train d’être préparées.
+          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+            <p class="state-title">
+              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun repère par module" }}
             </p>
-            <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-              Aucune carte d’ensemble n’est encore disponible.
+            <p class="small">
+              {{
+                ctx.isWorkspaceRefreshing
+                  ? "Les modules se mettent à jour."
+                  : "La vue d’ensemble apparaitra ici dès qu’un repère remonte."
+              }}
             </p>
           </div>
         </ng-template>
       </cfm-card>
 
       <cfm-card
-        class="desktop-card"
+        class="desktop-card home-section-card home-section-card--worksites"
         eyebrow="Chantiers"
-        title="Vue par chantier"
-        description="Le quatrième palier de la home remet la lecture chantier, sans encore réactiver les autres blocs secondaires."
+        title="Chantiers à suivre"
+        description="Les points utiles pour décider vite."
       >
         <div class="hero-chips">
           <cfm-status-chip
@@ -171,22 +190,26 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         </ul>
 
         <ng-template #emptyWorksites>
-          <div class="empty-copy">
-            <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-              Les repères chantier sont en train d’être préparés.
+          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+            <p class="state-title">
+              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun chantier à suivre" }}
             </p>
-            <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-              Aucun chantier n’est encore disponible pour cette vue.
+            <p class="small">
+              {{
+                ctx.isWorkspaceRefreshing
+                  ? "Les repères chantier se mettent à jour."
+                  : "Aucun point terrain ne demande d’action."
+              }}
             </p>
           </div>
         </ng-template>
       </cfm-card>
 
       <cfm-card
-        class="desktop-card"
+        class="desktop-card home-section-card home-section-card--other"
         eyebrow="Suivi"
-        title="Clients et coordination"
-        description="Le dernier palier de la home légère remet les repères restants, sans rouvrir les écrans détaillés."
+        title="Suivi quotidien"
+        description="Clients et coordination sans surcharge."
       >
         <div class="other-grid">
           <section class="dashboard-kpi-card other-section">
@@ -194,7 +217,7 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
               <div class="hero-copy">
                 <h3>À traiter</h3>
                 <p class="small">
-                  Les éléments chantier et document qui demandent encore un suivi simple.
+                  Ce qui demande une action rapide.
                 </p>
               </div>
 
@@ -222,12 +245,16 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
             </ul>
 
             <ng-template #emptyCoordination>
-              <div class="empty-copy">
-                <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-                  Les éléments à traiter sont en train d’être préparés.
+              <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+                <p class="state-title">
+                  {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun point à traiter" }}
                 </p>
-                <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-                  Aucun élément de coordination n’est en attente.
+                <p class="small">
+                  {{
+                    ctx.isWorkspaceRefreshing
+                      ? "Le suivi quotidien se prépare."
+                      : "Rien d’urgent côté coordination."
+                  }}
                 </p>
               </div>
             </ng-template>
@@ -238,7 +265,7 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
               <div class="hero-copy">
                 <h3>Vue par client</h3>
                 <p class="small">
-                  Une lecture commerciale courte pour repérer les clients qui demandent un suivi.
+                  Les clients qui demandent un suivi.
                 </p>
               </div>
 
@@ -266,12 +293,16 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
             </ul>
 
             <ng-template #emptyCustomers>
-              <div class="empty-copy">
-                <p class="small" *ngIf="ctx.isWorkspaceRefreshing">
-                  Les repères client sont en train d’être préparés.
+              <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
+                <p class="state-title">
+                  {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun client à suivre" }}
                 </p>
-                <p class="small" *ngIf="!ctx.isWorkspaceRefreshing">
-                  Aucun client ne demande de suivi dans cette vue.
+                <p class="small">
+                  {{
+                    ctx.isWorkspaceRefreshing
+                      ? "Les repères client se mettent à jour."
+                      : "Aucun suivi client prioritaire pour le moment."
+                  }}
                 </p>
               </div>
             </ng-template>
@@ -284,30 +315,46 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
     `
       :host {
         display: block;
+        color: #17312b;
+      }
+
+      cfm-card.desktop-card {
+        display: block;
       }
 
       .workspace-body {
         display: grid;
-        gap: 1.5rem;
+        gap: 1.25rem;
+        min-width: 0;
+      }
+
+      .hero-line,
+      .other-section-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.85rem;
         min-width: 0;
       }
 
       .hero-line {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 1rem;
-        margin-bottom: 1.25rem;
+        margin-bottom: 0.9rem;
+        padding-bottom: 0.15rem;
+        border-bottom: 1px solid rgba(33, 68, 49, 0.08);
       }
 
       .hero-copy {
         display: grid;
-        gap: 0.35rem;
+        gap: 0.25rem;
         min-width: 0;
       }
 
       .hero-copy h3 {
         margin: 0;
+        font-size: 1.02rem;
+        line-height: 1.2;
+        font-weight: 650;
+        color: #17312b;
       }
 
       .hero-copy p,
@@ -318,21 +365,40 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       .hero-chips {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.75rem;
+        align-items: center;
+        gap: 0.45rem;
         justify-content: flex-end;
+        min-width: 0;
+      }
+
+      .hero-chips cfm-status-chip {
+        max-width: 100%;
+      }
+
+      .hero-chip-primary,
+      .hero-chip-secondary {
+        display: inline-flex;
+      }
+
+      .hero-chip-secondary {
+        opacity: 0.78;
       }
 
       .dashboard-grid {
         display: grid;
         gap: 1rem;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
         min-width: 0;
+      }
+
+      .dashboard-grid--overview {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .other-grid {
         display: grid;
         gap: 1rem;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         min-width: 0;
       }
 
@@ -341,7 +407,25 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         margin: 0;
         padding: 0;
         display: grid;
-        gap: 0.9rem;
+        gap: 0.85rem;
+      }
+
+      .dashboard-kpi-card,
+      .alert-item,
+      .empty-copy {
+        border-radius: 1rem;
+        border: 1px solid rgba(33, 68, 49, 0.12);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 246, 0.9));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 10px 22px rgba(18, 33, 42, 0.04);
+        min-width: 0;
+      }
+
+      .dashboard-kpi-card {
+        display: grid;
+        gap: 0.65rem;
+        padding: 1rem 1.05rem;
       }
 
       .alert-item {
@@ -349,16 +433,12 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
-        padding: 1rem;
-        border-radius: 1rem;
-        background: linear-gradient(180deg, rgba(255, 252, 245, 0.96), rgba(247, 244, 236, 0.9));
-        border: 1px solid rgba(145, 109, 26, 0.14);
-        min-width: 0;
+        padding: 0.95rem 1rem;
       }
 
       .alert-copy {
         display: grid;
-        gap: 0.35rem;
+        gap: 0.3rem;
         min-width: 0;
       }
 
@@ -366,26 +446,9 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         align-content: start;
       }
 
-      .other-section-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 1rem;
-      }
-
       .worksite-copy p {
         line-height: 1.35;
         overflow-wrap: anywhere;
-      }
-
-      .dashboard-kpi-card {
-        display: grid;
-        gap: 0.6rem;
-        padding: 1rem;
-        border-radius: 1rem;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 246, 0.9));
-        border: 1px solid rgba(33, 68, 49, 0.12);
-        min-width: 0;
       }
 
       .dashboard-kpi-card p,
@@ -395,14 +458,47 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         margin: 0;
       }
 
+      .dashboard-kpi-card p,
+      .alert-copy p {
+        color: #415349;
+        line-height: 1.4;
+      }
+
+      .dashboard-kpi-card > .small,
+      .overview-highlight .small {
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: #52635a;
+      }
+
+      .alert-copy strong {
+        font-size: 0.98rem;
+        line-height: 1.25;
+        color: #17312b;
+      }
+
       .dashboard-kpi-card > strong:not(.overview-headline) {
-        font-size: 1.8rem;
-        line-height: 1;
+        font-size: 1.65rem;
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        color: #17312b;
+      }
+
+      .dashboard-kpi-card--attention {
+        border-color: rgba(186, 131, 34, 0.28);
+        background: linear-gradient(180deg, rgba(255, 252, 245, 0.97), rgba(247, 243, 232, 0.92));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.94),
+          0 12px 24px rgba(120, 84, 24, 0.08);
+      }
+
+      .dashboard-kpi-card--attention > strong {
+        color: #7a4a1f;
       }
 
       .overview-highlights {
         display: grid;
-        gap: 0.8rem;
+        gap: 0.65rem;
         grid-template-columns: minmax(0, 1fr);
         min-width: 0;
       }
@@ -410,9 +506,10 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       .overview-highlight {
         display: grid;
         gap: 0.25rem;
-        padding: 0.75rem;
+        padding: 0.7rem 0.75rem;
         border-radius: 0.85rem;
         background: rgba(33, 68, 49, 0.04);
+        border: 1px solid rgba(33, 68, 49, 0.08);
         min-width: 0;
       }
 
@@ -422,7 +519,7 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       }
 
       .dashboard-overview-card {
-        gap: 0.5rem;
+        gap: 0.55rem;
       }
 
       .dashboard-overview-card p {
@@ -433,8 +530,9 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       }
 
       .dashboard-overview-card > .overview-headline {
-        font-size: 1.2rem;
-        line-height: 1.2;
+        font-size: 1.08rem;
+        line-height: 1.25;
+        color: #17312b;
         word-break: normal;
         overflow-wrap: break-word;
         hyphens: auto;
@@ -445,7 +543,7 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       }
 
       .overview-highlight-value {
-        font-size: 0.92rem;
+        font-size: 0.9rem;
         line-height: 1.25;
         word-break: normal;
         overflow-wrap: break-word;
@@ -453,15 +551,67 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
       }
 
       .empty-copy {
-        padding: 0.25rem 0 0;
+        display: grid;
+        gap: 0.28rem;
+        padding: 0.94rem 1rem;
+        border-style: dashed;
+        align-content: start;
+      }
+
+      .empty-copy--loading {
+        border-color: rgba(168, 131, 60, 0.2);
+        background: linear-gradient(180deg, rgba(255, 249, 238, 0.96), rgba(255, 255, 255, 0.9));
+      }
+
+      .state-title {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.25;
+        font-weight: 650;
+        color: #17312b;
+      }
+
+      .empty-copy--loading .state-title {
+        color: #6c5422;
       }
 
       .small {
-        color: #52635a;
+        font-size: 0.84rem;
+        line-height: 1.35;
+        color: #617166;
       }
 
-      @media (max-width: 720px) {
-        .hero-line {
+      .empty-copy .small {
+        max-width: 44ch;
+      }
+
+      @media (max-width: 1280px) {
+        .dashboard-grid--overview {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .dashboard-grid--overview > .dashboard-overview-card:last-child:nth-child(odd) {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .workspace-body {
+          gap: 1.15rem;
+        }
+
+        .dashboard-grid--kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .other-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 1024px) {
+        .hero-line,
+        .other-section-header {
           flex-direction: column;
         }
 
@@ -471,6 +621,46 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
 
         .alert-item {
           flex-direction: column;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .dashboard-grid--kpis,
+        .dashboard-grid--overview {
+          grid-template-columns: 1fr;
+        }
+
+        .dashboard-kpi-card,
+        .alert-item,
+        .empty-copy {
+          padding: 0.95rem;
+        }
+
+        .home-section-card--worksites .alert-list,
+        .home-section-card--other .alert-list {
+          gap: 0.7rem;
+        }
+
+        .home-section-card--worksites .alert-item,
+        .home-section-card--other .alert-item {
+          gap: 0.72rem;
+          padding: 0.82rem 0.88rem;
+        }
+
+        .home-section-card--other .dashboard-kpi-card {
+          gap: 0.55rem;
+          padding: 0.86rem 0.9rem;
+        }
+
+        .home-section-card--worksites .hero-chips,
+        .home-section-card--other .hero-chips {
+          gap: 0.32rem;
+        }
+
+        .home-section-card--worksites .alert-copy,
+        .home-section-card--other .alert-copy,
+        .home-section-card--other .hero-copy {
+          gap: 0.22rem;
         }
       }
     `,

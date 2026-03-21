@@ -45,7 +45,7 @@ import { ControlValueAccessor, NG_VALUE_ACCESSOR } from "@angular/forms";
 
       .field {
         display: grid;
-        gap: 0.45rem;
+        gap: 0.48rem;
       }
 
       .label,
@@ -55,6 +55,8 @@ import { ControlValueAccessor, NG_VALUE_ACCESSOR } from "@angular/forms";
 
       .label {
         font-size: 0.92rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
       }
 
       .input {
@@ -65,13 +67,27 @@ import { ControlValueAccessor, NG_VALUE_ACCESSOR } from "@angular/forms";
         padding: 0.85rem 1rem;
         font: inherit;
         color: var(--cfm-color-ink, #10222b);
-        background: var(--cfm-color-surface, #fffdfa);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 252, 252, 0.94));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 8px 18px rgba(18, 33, 42, 0.04);
+        transition:
+          border-color 140ms ease,
+          box-shadow 140ms ease,
+          background-color 140ms ease,
+          transform 140ms ease;
       }
 
       .input:focus {
-        outline: 2px solid color-mix(in srgb, var(--cfm-color-primary, #1d6d64) 24%, transparent);
-        outline-offset: 1px;
+        outline: 2px solid color-mix(in srgb, var(--cfm-color-primary, #1d6d64) 18%, transparent);
+        outline-offset: 2px;
         border-color: var(--cfm-color-primary, #1d6d64);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.92),
+          0 0 0 4px rgba(29, 109, 100, 0.12),
+          0 12px 28px rgba(18, 33, 42, 0.06);
+        transform: translateY(-1px);
       }
 
       .input:disabled {

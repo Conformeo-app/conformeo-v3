@@ -19,6 +19,7 @@ from app.db.models.organization_site import (
 from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.quote import Quote, QuoteStatus
 from app.db.models.user import User, UserStatus
+from app.db.models.worksite_coordination import WorksiteCoordinationItem
 
 __all__ = [
     "AuditAction",
@@ -48,4 +49,5 @@ __all__ = [
     "QuoteStatus",
     "User",
     "UserStatus",
+    "WorksiteCoordinationItem",
 ]

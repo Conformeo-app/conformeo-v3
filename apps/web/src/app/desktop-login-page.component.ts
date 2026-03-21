@@ -48,7 +48,7 @@ import { DESKTOP_LOGIN_PAGE_CONTEXT } from "./desktop-login-page-context";
         />
 
         <cfm-button type="submit" [disabled]="ctx.loading" [block]="true">
-          {{ ctx.loading ? "Connexion..." : "Se connecter" }}
+          {{ ctx.loading ? "Connexion en cours" : "Se connecter" }}
         </cfm-button>
       </form>
 

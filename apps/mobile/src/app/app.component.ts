@@ -190,19 +190,19 @@ import {
                   <span>{{ status.fileReferenceCount }}</span>
                 </div>
                 <div class="database-stat">
-                  <strong>Ops en queue</strong>
+                  <strong>Actions locales suivies</strong>
                   <span>{{ status.syncOperationCount }}</span>
                 </div>
                 <div class="database-stat">
-                  <strong>En attente</strong>
+                  <strong>Prêtes à envoyer</strong>
                   <span>{{ status.pendingSyncOperationCount }}</span>
                 </div>
                 <div class="database-stat">
-                  <strong>Échecs</strong>
+                  <strong>À vérifier</strong>
                   <span>{{ status.failedSyncOperationCount }}</span>
                 </div>
                 <div class="database-stat">
-                  <strong>Retry prêtes</strong>
+                  <strong>Prêtes à relancer</strong>
                   <span>{{ status.retryableSyncOperationCount }}</span>
                 </div>
                 <div class="database-stat">
@@ -304,14 +304,14 @@ import {
               </div>
 
               <div class="queue-section">
-                <strong>Queue locale de synchronisation</strong>
+                <strong>Actions locales à synchroniser</strong>
                 <p class="supporting-copy">
-                  Cette file locale prépare les futures opérations offline-first. Les écritures restent locales
-                  mais chaque opération garde son type, son statut, ses tentatives et son dernier échec.
+                  Les actions restent d'abord sur l’appareil. Cette zone aide à comprendre ce qui est prêt,
+                  déjà traité ou à vérifier avant le prochain envoi.
                 </p>
 
                 <div class="module-block" *ngIf="preparedWorksiteSyncBatch as preparedBatch">
-                  <strong>Synchronisation terrain préparée</strong>
+                  <strong>Préparation chantier déjà prête</strong>
                   <div class="worksite-sync-overview">
                     <cfm-sync-state
                       title="Lots terrain prêts localement"
@@ -327,7 +327,7 @@ import {
                       [tone]="preparedBatch.preparedItemCount > 0 ? 'progress' : 'neutral'"
                     />
                     <cfm-status-chip
-                      [label]="preparedBatch.sourceOperationCount + ' opération(s) source'"
+                      [label]="preparedBatch.sourceOperationCount + ' action(s) locale(s) d’origine'"
                       tone="calm"
                     />
                     <cfm-status-chip
@@ -363,26 +363,26 @@ import {
 
                 <form class="draft-form" (ngSubmit)="enqueueExampleOperation()">
                   <label>
-                    <span>Type d'opération</span>
+                    <span>Type d’action locale</span>
                     <select [(ngModel)]="queueOperationType" name="queueOperationType">
                       <option *ngFor="let operationType of supportedOperationTypes" [value]="operationType">
-                        {{ operationType }}
+                        {{ getLocalSyncOperationTypeLabel(operationType) }}
                       </option>
                     </select>
                   </label>
 
                   <label>
-                    <span>Record cible</span>
+                    <span>Élément concerné</span>
                     <input
                       [(ngModel)]="queueTargetRecordId"
                       name="queueTargetRecordId"
                       type="text"
-                      placeholder="Laisser vide pour utiliser le dernier brouillon"
+                      placeholder="Laisser vide pour reprendre le dernier brouillon"
                     />
                   </label>
 
                   <ion-button expand="block" type="submit" [disabled]="syncQueueBusy">
-                    {{ syncQueueBusy ? "Ajout..." : "Ajouter à la queue locale" }}
+                    {{ syncQueueBusy ? "Ajout..." : "Ajouter une action locale" }}
                   </ion-button>
                 </form>
 
@@ -390,17 +390,17 @@ import {
                   <li *ngFor="let operation of localSyncOperations">
                     <ng-container *ngIf="getOperationSyncStatus(operation) as operationSyncStatus">
                       <div class="queue-meta">
-                        <strong>{{ operation.operationType }} · {{ operation.entityName }}</strong>
+                        <strong>{{ getLocalSyncOperationTitle(operation) }}</strong>
                         <span>
-                          {{ operationSyncStatus.label }} · tentative {{ operation.attempts }}/{{ operation.maxAttempts }}
+                          {{ operationSyncStatus.label }} · {{ getLocalSyncOperationAttemptLabel(operation) }}
                         </span>
-                        <small>{{ operation.entityId }}</small>
+                        <small>Repère local : {{ operation.entityId }}</small>
                         <small>{{ operationSyncStatus.detail }}</small>
                         <small *ngIf="operation.nextAttemptAt">
-                          prochain passage {{ operation.nextAttemptAt | date: "short" }}
+                          nouvel essai possible {{ operation.nextAttemptAt | date: "short" }}
                         </small>
-                        <small *ngIf="operation.lastErrorMessage">
-                          dernier souci : {{ operation.lastErrorMessage }}
+                        <small *ngIf="formatLocalSyncIssueMessage(operation.lastErrorMessage) as issueMessage">
+                          point à vérifier : {{ issueMessage }}
                         </small>
                       </div>
                     </ng-container>
@@ -422,7 +422,7 @@ import {
                         [disabled]="syncQueueBusy || operation.status !== 'failed'"
                         (click)="requeueOperation(operation)"
                       >
-                        Replanifier
+                        Relancer
                       </ion-button>
 
                       <ion-button
@@ -432,7 +432,7 @@ import {
                         [disabled]="syncQueueBusy || operation.status === 'completed'"
                         (click)="completeOperation(operation)"
                       >
-                        Marquer synchronisée
+                        Marquer comme synchronisée
                       </ion-button>
                     </div>
                   </li>
@@ -440,12 +440,13 @@ import {
 
                 <cfm-empty-state
                   *ngIf="localSyncOperations.length === 0"
-                  title="Queue locale vide"
-                  description="Aucune opération n’attend encore de synchronisation dans ce socle Sprint 0."
+                  title="Aucune action locale à synchroniser"
+                  description="Aucune action locale n’attend encore de synchronisation pour le moment."
                 />
               </div>
 
               <p class="feedback error" *ngIf="localDatabaseError">{{ localDatabaseError }}</p>
+              <p class="feedback success" *ngIf="localDatabaseFeedback && !localDatabaseError">{{ localDatabaseFeedback }}</p>
           </cfm-card>
 
           <cfm-card
@@ -1268,6 +1269,7 @@ import {
               </div>
 
               <p class="feedback error" *ngIf="worksiteError">{{ worksiteError }}</p>
+              <p class="feedback success" *ngIf="worksiteFeedback && !worksiteError">{{ worksiteFeedback }}</p>
             </cfm-card>
 
             <ng-template #noWorksiteSelected>
@@ -1291,8 +1293,9 @@ import {
         min-height: 100%;
         padding: calc(2rem + env(safe-area-inset-top)) 1rem 2rem;
         background:
-          radial-gradient(circle at top, rgba(88, 165, 149, 0.22), transparent 34%),
-          linear-gradient(180deg, #f4f1ea, #edf5f2);
+          radial-gradient(circle at top, rgba(88, 165, 149, 0.24), transparent 34%),
+          radial-gradient(circle at top right, rgba(245, 188, 88, 0.18), transparent 24%),
+          linear-gradient(180deg, #f7f2e9, #edf5f2);
       }
 
       .auth-form,
@@ -1328,6 +1331,7 @@ import {
 
       .section-card {
         margin-top: 1.5rem;
+        position: relative;
       }
 
       .quick-capture-overview,
@@ -1346,19 +1350,31 @@ import {
       .quick-capture-card {
         display: grid;
         gap: 0.3rem;
-        padding: 0.95rem;
+        padding: 1rem;
         border: 1px solid #bfd3cf;
-        border-radius: 18px;
-        background: #fffdfa;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 251, 250, 0.84));
+        box-shadow:
+          0 14px 28px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
         font: inherit;
         text-align: left;
         cursor: pointer;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          border-color 140ms ease,
+          background-color 140ms ease;
       }
 
       .quick-capture-card.is-active {
         border-color: #1d6d64;
-        box-shadow: 0 0 0 2px rgba(29, 109, 100, 0.12);
-        background: #f4faf8;
+        box-shadow:
+          0 0 0 3px rgba(29, 109, 100, 0.12),
+          0 16px 32px rgba(18, 33, 42, 0.08);
+        background: linear-gradient(180deg, #f7fdfb, #eef8f4);
+        transform: translateY(-1px);
       }
 
       .quick-capture-card span,
@@ -1370,10 +1386,12 @@ import {
       .quick-capture-detail {
         display: grid;
         gap: 0.75rem;
-        padding: 1rem;
-        border-radius: 18px;
-        background: #f5faf8;
+        padding: 1.05rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(245, 250, 248, 0.96), rgba(255, 255, 255, 0.86));
         border: 1px solid #d7e6e1;
+        box-shadow: 0 14px 28px rgba(18, 33, 42, 0.05);
       }
 
       .quick-capture-steps {
@@ -1387,10 +1405,12 @@ import {
       .quick-capture-steps li {
         display: grid;
         gap: 0.2rem;
-        padding: 0.85rem 0.95rem;
-        border-radius: 16px;
-        background: #fffdfa;
+        padding: 0.92rem 1rem;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 252, 252, 0.9));
         border: 1px solid #dbe8e3;
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .quick-capture-steps span {
@@ -1421,7 +1441,11 @@ import {
         border-radius: 14px;
         padding: 0.85rem 0.95rem;
         font: inherit;
-        background: #fffdfa;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 252, 252, 0.92));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 8px 20px rgba(18, 33, 42, 0.04);
       }
 
       textarea {
@@ -1449,9 +1473,14 @@ import {
       .database-stat {
         display: grid;
         gap: 0.2rem;
-        padding: 0.8rem 0.9rem;
-        border-radius: 16px;
-        background: #f1f8f5;
+        padding: 0.9rem 0.95rem;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(241, 248, 245, 0.96), rgba(255, 255, 255, 0.88));
+        border: 1px solid rgba(191, 211, 207, 0.72);
+        box-shadow:
+          0 12px 24px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
       }
 
       .database-stat strong {
@@ -1487,19 +1516,31 @@ import {
         display: grid;
         gap: 0.3rem;
         width: 100%;
-        padding: 1rem;
+        padding: 1.02rem;
         border: 1px solid #d5e3df;
-        border-radius: 18px;
-        background: #fffdfa;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 250, 0.9));
+        box-shadow:
+          0 14px 28px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.84);
         text-align: left;
         font: inherit;
         cursor: pointer;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          border-color 140ms ease,
+          background-color 140ms ease;
       }
 
       .worksite-list-item.is-active {
         border-color: #1d6d64;
-        box-shadow: 0 0 0 2px rgba(29, 109, 100, 0.12);
-        background: #f4faf8;
+        box-shadow:
+          0 0 0 3px rgba(29, 109, 100, 0.12),
+          0 18px 36px rgba(18, 33, 42, 0.08);
+        background: linear-gradient(180deg, #f7fdfb, #eef8f4);
+        transform: translateY(-1px);
       }
 
       .worksite-list-item span,
@@ -1543,9 +1584,12 @@ import {
       .worksite-info-block {
         display: grid;
         gap: 0.25rem;
-        padding: 0.9rem;
-        border-radius: 16px;
-        background: #f1f8f5;
+        padding: 0.95rem;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(241, 248, 245, 0.96), rgba(255, 255, 255, 0.88));
+        border: 1px solid rgba(191, 211, 207, 0.7);
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .worksite-section {
@@ -1564,10 +1608,12 @@ import {
       .worksite-detail-list li {
         display: grid;
         gap: 0.15rem;
-        padding: 0.9rem 0.95rem;
-        border-radius: 16px;
-        background: #fffdfa;
+        padding: 0.95rem 1rem;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 252, 252, 0.9));
         border: 1px solid #dbe8e3;
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .worksite-equipment-item {
@@ -1643,10 +1689,12 @@ import {
       .worksite-safety-item {
         display: grid;
         gap: 0.7rem;
-        padding: 0.9rem 0.95rem;
-        border-radius: 16px;
-        background: #fffdfa;
+        padding: 0.95rem 1rem;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 252, 252, 0.9));
         border: 1px solid #dbe8e3;
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .worksite-safety-answers {
@@ -1901,8 +1949,13 @@ import {
       }
 
       .queue-list li {
-        padding: 0.9rem 0;
-        border-bottom: 1px solid #dbe8e3;
+        padding: 0.92rem 0.95rem;
+        border-bottom: none;
+        border-radius: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 251, 250, 0.9));
+        border: 1px solid #dbe8e3;
+        box-shadow: 0 10px 22px rgba(18, 33, 42, 0.04);
       }
 
       .queue-list li:last-child {
@@ -1927,15 +1980,59 @@ import {
       }
 
       li + li {
-        margin-top: 0.45rem;
+        margin-top: 0.55rem;
       }
 
       .feedback {
+        position: relative;
+        display: grid;
+        gap: 0.2rem;
         margin-top: 1rem;
+        padding: 0.92rem 0.95rem 0.92rem 1.15rem;
+        border-radius: 18px;
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 249, 0.86));
+        box-shadow:
+          0 14px 28px rgba(18, 33, 42, 0.06),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        animation: mobileFeedbackPulse 220ms ease;
+      }
+
+      .feedback::before {
+        content: "";
+        position: absolute;
+        left: 0.78rem;
+        top: 0.9rem;
+        bottom: 0.9rem;
+        width: 4px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.24;
       }
 
       .feedback.error {
         color: #8a2d2d;
+        background:
+          linear-gradient(180deg, rgba(254, 243, 241, 0.98), rgba(255, 255, 255, 0.88));
+      }
+
+      .feedback.success {
+        color: #1f6a47;
+        background:
+          linear-gradient(180deg, rgba(239, 250, 245, 0.98), rgba(255, 255, 255, 0.88));
+      }
+
+      @keyframes mobileFeedbackPulse {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
     `
   ]
@@ -1956,6 +2053,7 @@ export class AppComponent implements OnDestroy {
   worksiteEquipmentMovementBusyId: string | null = null;
   syncQueueBusy = false;
   localDatabaseError = "";
+  localDatabaseFeedback = "";
   draftTitle = "";
   draftBody = "";
   queueOperationType: LocalSyncOperationType = "update";
@@ -1988,6 +2086,7 @@ export class AppComponent implements OnDestroy {
   worksiteImportBusy = false;
   worksiteLastImportedAt: string | null = null;
   worksiteError = "";
+  worksiteFeedback = "";
   session: AuthSession | null = null;
   accessToken = getStoredAccessToken();
   selectedOrganizationId = getStoredOrganizationId();
@@ -2085,6 +2184,8 @@ export class AppComponent implements OnDestroy {
   async submitLogin(): Promise<void> {
     this.loading = true;
     this.errorMessage = "";
+    this.localDatabaseFeedback = "";
+    this.worksiteFeedback = "";
 
     try {
       const response = await login({
@@ -2105,12 +2206,15 @@ export class AppComponent implements OnDestroy {
   }
 
   async changeOrganization(): Promise<void> {
+    this.localDatabaseFeedback = "";
+    this.worksiteFeedback = "";
     await this.refreshSession(this.selectedOrganizationId);
   }
 
   async saveLocalDraft(): Promise<void> {
     this.localDatabaseBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       const recordId = `draft-${Date.now()}`;
@@ -2138,6 +2242,7 @@ export class AppComponent implements OnDestroy {
       this.draftTitle = "";
       this.draftBody = "";
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Brouillon enregistré sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2154,6 +2259,7 @@ export class AppComponent implements OnDestroy {
 
     this.photoCaptureBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       if (!file.type.startsWith("image/")) {
@@ -2201,6 +2307,7 @@ export class AppComponent implements OnDestroy {
       });
 
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Photo enregistrée sur l’appareil.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2214,6 +2321,7 @@ export class AppComponent implements OnDestroy {
   async enqueueExampleOperation(): Promise<void> {
     this.syncQueueBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       const targetRecordId = await this.resolveQueueTargetRecordId();
@@ -2256,6 +2364,7 @@ export class AppComponent implements OnDestroy {
       });
       this.queueTargetRecordId = "";
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Action locale enregistrée. Elle reste en attente de synchronisation.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2266,6 +2375,7 @@ export class AppComponent implements OnDestroy {
   async simulateOperationFailure(operation: LocalSyncOperation): Promise<void> {
     this.syncQueueBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       const inProgress = operation.status === "in_progress"
@@ -2276,6 +2386,7 @@ export class AppComponent implements OnDestroy {
         message: "Echec reseau local simule pour Sprint 0."
       });
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Action locale conservée sur l’appareil, mais à vérifier avant le prochain envoi.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2286,10 +2397,12 @@ export class AppComponent implements OnDestroy {
   async requeueOperation(operation: LocalSyncOperation): Promise<void> {
     this.syncQueueBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       await mobileLocalDatabase.requeueSyncOperation(operation.operationId);
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Action locale remise en attente de synchronisation.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2300,10 +2413,12 @@ export class AppComponent implements OnDestroy {
   async completeOperation(operation: LocalSyncOperation): Promise<void> {
     this.syncQueueBusy = true;
     this.localDatabaseError = "";
+    this.localDatabaseFeedback = "";
 
     try {
       await mobileLocalDatabase.markSyncOperationCompleted(operation.operationId);
       await this.refreshLocalDatabaseView();
+      this.localDatabaseFeedback = "Action locale marquée comme synchronisée pour le moment.";
     } catch (error) {
       this.localDatabaseError = this.toErrorMessage(error);
     } finally {
@@ -2343,6 +2458,69 @@ export class AppComponent implements OnDestroy {
 
   getOperationSyncStatus(operation: LocalSyncOperation): SyncStatusCopy {
     return getOperationSyncStatusCopy(operation);
+  }
+
+  getLocalSyncOperationTypeLabel(operationType: LocalSyncOperationType): string {
+    switch (operationType) {
+      case "create":
+        return "Création locale";
+      case "update":
+        return "Mise à jour locale";
+      case "delete_soft":
+        return "Retrait local";
+      case "upload_media":
+        return "Média à envoyer";
+      case "status_change":
+        return "Changement d’état";
+    }
+  }
+
+  getLocalSyncEntityLabel(entityName: string): string {
+    switch (entityName) {
+      case "field_draft":
+        return "Brouillon terrain";
+      case "document_draft":
+        return "Document local";
+      case "worksite_equipment_movement":
+        return "Mouvement équipement";
+      case "worksite_proof":
+        return "Photo preuve";
+      case "worksite_voice_note":
+        return "Note vocale";
+      case "worksite_safety_checklist":
+        return "Checklist sécurité";
+      case "worksite_risk_report":
+        return "Signalement de risque";
+      case "worksite_signature":
+        return "Signature simple";
+      default:
+        return entityName;
+    }
+  }
+
+  getLocalSyncOperationTitle(operation: LocalSyncOperation): string {
+    return `${this.getLocalSyncEntityLabel(operation.entityName)} · ${this.getLocalSyncOperationTypeLabel(operation.operationType)}`;
+  }
+
+  getLocalSyncOperationAttemptLabel(operation: LocalSyncOperation): string {
+    return `tentative ${operation.attempts} sur ${operation.maxAttempts}`;
+  }
+
+  formatLocalSyncIssueMessage(message: string | null): string | null {
+    if (!message) {
+      return null;
+    }
+
+    const normalized = message.toLowerCase();
+    if (normalized.includes("reseau") || normalized.includes("network")) {
+      return "La dernière tentative a été interrompue. Une nouvelle tentative peut repartir.";
+    }
+
+    if (normalized.includes("timeout")) {
+      return "La dernière tentative a pris trop de temps. Une nouvelle tentative peut repartir.";
+    }
+
+    return message;
   }
 
   getWorksiteSyncStatus(worksite: WorksiteEssentialDetail): SyncStatusCopy {
@@ -2642,6 +2820,7 @@ export class AppComponent implements OnDestroy {
   async selectWorksite(worksiteId: string): Promise<void> {
     this.selectedWorksiteId = worksiteId;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
     this.resetWorksiteSignatureDraft();
     this.resetWorksiteRiskDraft();
     await this.refreshSelectedWorksiteDetail();
@@ -2651,10 +2830,12 @@ export class AppComponent implements OnDestroy {
     const organizationId = this.currentMembership?.organization.id ?? null;
     this.preparingWorksiteId = worksiteId;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       await mobileLocalDatabase.prepareWorksiteForOffline(organizationId, worksiteId);
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Chantier prêt hors ligne sur cet appareil.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2675,6 +2856,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteEquipmentMovementBusyId = equipment.id;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       await mobileLocalDatabase.createWorksiteEquipmentMovement({
@@ -2692,6 +2874,7 @@ export class AppComponent implements OnDestroy {
           || null
       });
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Mouvement enregistré sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2708,6 +2891,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteProofCaptureBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       if (!file.type.startsWith("image/")) {
@@ -2729,6 +2913,7 @@ export class AppComponent implements OnDestroy {
         capturedAt
       });
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Preuve enregistrée sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2748,6 +2933,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteVoiceNoteCaptureBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       if (file.type && !file.type.startsWith("audio/")) {
@@ -2770,6 +2956,7 @@ export class AppComponent implements OnDestroy {
         durationSeconds: await this.readAudioDuration(localUri)
       });
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Note vocale enregistrée sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2849,6 +3036,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteSignatureCaptureBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       this.prepareSignatureCanvas(canvas);
@@ -2865,6 +3053,7 @@ export class AppComponent implements OnDestroy {
       });
       this.clearWorksiteSignatureCanvas(canvas);
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Signature enregistrée sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2881,6 +3070,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteRiskReportBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       if (!file.type.startsWith("image/")) {
@@ -2893,6 +3083,7 @@ export class AppComponent implements OnDestroy {
         mimeType: file.type || "image/jpeg",
         sizeBytes: file.size || null
       };
+      this.worksiteFeedback = "Photo liée au signalement prête sur l’appareil.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2916,6 +3107,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteProofCommentBusyId = proof.id;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       const updatedProof = await mobileLocalDatabase.updateWorksiteProofComment({
@@ -2928,6 +3120,7 @@ export class AppComponent implements OnDestroy {
         [proof.id]: updatedProof.comment_text ?? ""
       };
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Commentaire enregistré sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2949,6 +3142,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteRiskReportBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       await mobileLocalDatabase.createWorksiteRiskReport({
@@ -2965,6 +3159,7 @@ export class AppComponent implements OnDestroy {
       });
       this.resetWorksiteRiskDraft();
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback = "Signalement enregistré sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -2987,6 +3182,7 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteSafetyChecklistBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       const updatedChecklist = await mobileLocalDatabase.saveWorksiteSafetyChecklist({
@@ -2998,6 +3194,10 @@ export class AppComponent implements OnDestroy {
       });
       this.worksiteSafetyChecklistDraft = updatedChecklist;
       await this.refreshLocalDatabaseView();
+      this.worksiteFeedback =
+        targetStatus === "validated"
+          ? "Checklist validée sur l’appareil et en attente de synchronisation."
+          : "Checklist enregistrée sur l’appareil et en attente de synchronisation.";
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -3019,12 +3219,16 @@ export class AppComponent implements OnDestroy {
 
     this.worksiteImportBusy = true;
     this.worksiteError = "";
+    this.worksiteFeedback = "";
 
     try {
       const organizationId = this.currentMembership.organization.id;
       const summaries = await fetchWorksiteSummaries(this.accessToken, organizationId);
       await mobileLocalDatabase.importWorksiteSummaries(organizationId, summaries);
       await this.refreshLocalDatabaseView();
+      if (!options.silentIfOffline) {
+        this.worksiteFeedback = "Chantiers mis à jour sur l’appareil et synchronisés pour le moment.";
+      }
     } catch (error) {
       this.worksiteError = this.toErrorMessage(error);
     } finally {
@@ -3048,6 +3252,8 @@ export class AppComponent implements OnDestroy {
     this.resetWorksiteRiskDraft();
     this.worksiteLastImportedAt = null;
     this.worksiteError = "";
+    this.localDatabaseFeedback = "";
+    this.worksiteFeedback = "";
   }
 
   private async refreshSession(organizationId?: string | null): Promise<void> {

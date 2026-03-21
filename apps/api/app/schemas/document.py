@@ -11,8 +11,11 @@ class DocumentRead(BaseReadModel):
     attached_to_entity_id: UUID
     attached_to_field: str | None
     uploaded_by_user_id: UUID | None
+    linked_signature_document_id: UUID | None
+    linked_proof_document_ids: list[UUID]
     document_type: str
     source: str
+    lifecycle_status: str | None
     status: DocumentStatus
     file_name: str
     mime_type: str | None

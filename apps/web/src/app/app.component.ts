@@ -360,17 +360,23 @@ type DashboardCustomerOverviewItem = {
               title="Chargement du cockpit"
               description="Les repères entreprise, chantier et facturation sont en train d’être préparés."
             >
-              <div class="loading-state-card" aria-hidden="true">
-                <div class="loading-state-hero"></div>
-                <div class="loading-state-grid">
-                  <span></span>
-                  <span></span>
-                  <span></span>
+              <div class="loading-state-card">
+                <div class="loading-state-skeleton" aria-hidden="true">
+                  <div class="loading-state-hero"></div>
+                  <div class="loading-state-grid">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                  <div class="loading-state-lines">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
                 </div>
-                <div class="loading-state-lines">
-                  <span></span>
-                  <span></span>
-                  <span></span>
+                <div class="loading-state-copy">
+                  <p class="loading-state-label">Mise à jour en cours</p>
+                  <p class="small">Les repères arrivent sans bloquer votre lecture.</p>
                 </div>
               </div>
             </cfm-card>
@@ -686,18 +692,22 @@ type DashboardCustomerOverviewItem = {
                 </ul>
 
                 <ng-template #emptyCoordinationTodo>
-                  <p class="small">
-                    {{
+                  <cfm-empty-state
+                    [title]="hasActiveCoordinationFilters ? 'Aucun résultat pour ces filtres' : 'Rien à coordonner pour le moment'"
+                    [description]="
                       hasActiveCoordinationFilters
-                        ? "Aucun élément coordonné ne correspond aux filtres."
-                        : "Aucun chantier ni document coordonné à traiter pour le moment."
-                    }}
-                  </p>
+                        ? 'Ajustez les filtres pour élargir la lecture chantier.'
+                        : 'Les chantiers et documents à traiter apparaitront ici.'
+                    "
+                  />
                 </ng-template>
               </ng-container>
 
               <ng-template #chantierCoordinationDisabled>
-                <p class="small">Activez le module Chantier pour faire apparaître cette lecture.</p>
+                <cfm-empty-state
+                  title="Module Chantier non activé"
+                  description="Activez le module Chantier pour afficher cette lecture de coordination."
+                />
               </ng-template>
             </section>
 
@@ -769,7 +779,7 @@ type DashboardCustomerOverviewItem = {
                         [disabled]="worksiteDocumentPdfBusyId === item.id"
                         (click)="exportWorksiteSummaryPdf(item.id)"
                       >
-                        {{ worksiteDocumentPdfBusyId === item.id ? "Génération..." : "Fiche chantier PDF" }}
+                        {{ worksiteDocumentPdfBusyId === item.id ? "Génération en cours" : "Fiche chantier PDF" }}
                       </cfm-button>
 
                       <cfm-button
@@ -1005,7 +1015,7 @@ type DashboardCustomerOverviewItem = {
                         >
                           {{
                             worksiteCoordinationBusyId === item.id
-                              ? "Enregistrement..."
+                              ? "Enregistrement en cours"
                               : "Enregistrer"
                           }}
                         </cfm-button>
@@ -1148,7 +1158,7 @@ type DashboardCustomerOverviewItem = {
                         >
                           {{
                             worksitePreventionPlanPdfBusyId === item.id
-                              ? "Génération..."
+                              ? "Génération en cours"
                               : "Exporter le PDF"
                           }}
                         </cfm-button>
@@ -1167,18 +1177,22 @@ type DashboardCustomerOverviewItem = {
                 </ul>
 
                 <ng-template #emptyWorksiteOverview>
-                  <p class="small">
-                    {{
+                  <cfm-empty-state
+                    [title]="hasActiveCoordinationFilters ? 'Aucun chantier pour ces filtres' : 'Aucun chantier à afficher'"
+                    [description]="
                       hasActiveCoordinationFilters
-                        ? "Aucun chantier ne correspond aux filtres de coordination."
-                        : "Aucun chantier à afficher pour le moment."
-                    }}
-                  </p>
+                        ? 'Changez les filtres de coordination pour retrouver un chantier.'
+                        : 'Les repères chantier apparaitront ici dès qu’ils seront disponibles.'
+                    "
+                  />
                 </ng-template>
               </ng-container>
 
               <ng-template #chantierOverviewDisabled>
-                <p class="small">Activez le module Chantier pour faire apparaître cette lecture.</p>
+                <cfm-empty-state
+                  title="Module Chantier non activé"
+                  description="Activez le module Chantier pour afficher cette vue synthétique."
+                />
               </ng-template>
             </section>
 
@@ -1323,7 +1337,7 @@ type DashboardCustomerOverviewItem = {
                       >
                         {{
                           isWorksiteDocumentDownloadBusy(document)
-                            ? "Téléchargement..."
+                            ? "Téléchargement en cours"
                             : getWorksiteDocumentActionLabel(document)
                         }}
                       </cfm-button>
@@ -1449,7 +1463,7 @@ type DashboardCustomerOverviewItem = {
                         >
                           {{
                             worksiteDocumentCoordinationBusyId === document.id
-                              ? "Enregistrement..."
+                              ? "Enregistrement en cours"
                               : "Enregistrer"
                           }}
                         </cfm-button>
@@ -1487,12 +1501,18 @@ type DashboardCustomerOverviewItem = {
                 </ul>
 
                 <ng-template #emptyWorksiteDocuments>
-                  <p class="small">Aucun document chantier à consulter pour le filtre actuel.</p>
+                  <cfm-empty-state
+                    title="Aucun document pour ce filtre"
+                    description="Ajustez les filtres ou générez un document chantier pour le retrouver ici."
+                  />
                 </ng-template>
               </ng-container>
 
               <ng-template #chantierDocumentsDisabled>
-                <p class="small">Activez le module Chantier pour consulter les documents liés aux chantiers.</p>
+                <cfm-empty-state
+                  title="Module Chantier non activé"
+                  description="Activez le module Chantier pour consulter les documents liés aux chantiers."
+                />
               </ng-template>
             </section>
 
@@ -1548,12 +1568,18 @@ type DashboardCustomerOverviewItem = {
                 </ul>
 
                 <ng-template #emptyCustomerOverview>
-                  <p class="small">Aucun client à afficher pour le moment.</p>
+                  <cfm-empty-state
+                    title="Aucun client à suivre"
+                    description="Les clients demandant un suivi apparaitront ici dès qu’un repère remonte."
+                  />
                 </ng-template>
               </ng-container>
 
               <ng-template #customerOverviewDisabled>
-                <p class="small">Activez le module Facturation pour faire apparaître cette lecture.</p>
+                <cfm-empty-state
+                  title="Module Facturation non activé"
+                  description="Activez le module Facturation pour afficher cette lecture client."
+                />
               </ng-template>
             </section>
           </cfm-card>
@@ -1610,7 +1636,7 @@ type DashboardCustomerOverviewItem = {
 
               <div class="form-actions inline-actions">
                 <cfm-button type="submit" [disabled]="betaFeedbackCopyBusy || !canCopyBetaFeedback">
-                  {{ betaFeedbackCopyBusy ? "Copie..." : "Copier le retour" }}
+                  {{ betaFeedbackCopyBusy ? "Copie en cours" : "Copier le retour" }}
                 </cfm-button>
 
                 <cfm-button
@@ -1645,17 +1671,23 @@ type DashboardCustomerOverviewItem = {
             title="Chargement en cours"
             description="Le profil entreprise et les sites sont en train d’être chargés."
           >
-            <div class="loading-state-card" aria-hidden="true">
-              <div class="loading-state-hero"></div>
-              <div class="loading-state-grid">
-                <span></span>
-                <span></span>
-                <span></span>
+            <div class="loading-state-card">
+              <div class="loading-state-skeleton" aria-hidden="true">
+                <div class="loading-state-hero"></div>
+                <div class="loading-state-grid">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <div class="loading-state-lines">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
               </div>
-              <div class="loading-state-lines">
-                <span></span>
-                <span></span>
-                <span></span>
+              <div class="loading-state-copy">
+                <p class="loading-state-label">Mise à jour en cours</p>
+                <p class="small">Les données réglementaires restent en préparation.</p>
               </div>
             </div>
           </cfm-card>
@@ -1733,7 +1765,7 @@ type DashboardCustomerOverviewItem = {
 
                 <div class="form-actions">
                   <cfm-button type="submit" [disabled]="organizationProfileSaving || !canSubmitOnboarding">
-                    {{ organizationProfileSaving ? "Initialisation..." : "Initialiser l’entreprise" }}
+                    {{ organizationProfileSaving ? "Initialisation en cours" : "Initialiser l’entreprise" }}
                   </cfm-button>
                 </div>
               </form>
@@ -1849,7 +1881,7 @@ type DashboardCustomerOverviewItem = {
 
                 <div class="form-actions">
                   <cfm-button type="submit" [disabled]="!canManageOrganization || organizationProfileSaving">
-                    {{ organizationProfileSaving ? "Enregistrement..." : "Enregistrer le profil" }}
+                    {{ organizationProfileSaving ? "Enregistrement en cours" : "Enregistrer le profil" }}
                   </cfm-button>
                 </div>
               </form>
@@ -1917,7 +1949,7 @@ type DashboardCustomerOverviewItem = {
 
                 <div class="form-actions">
                   <cfm-button type="submit" [disabled]="!canManageOrganization || organizationProfileSaving">
-                    {{ organizationProfileSaving ? "Enregistrement..." : "Enregistrer le questionnaire" }}
+                    {{ organizationProfileSaving ? "Enregistrement en cours" : "Enregistrer le questionnaire" }}
                   </cfm-button>
                 </div>
               </form>
@@ -1966,7 +1998,7 @@ type DashboardCustomerOverviewItem = {
 
                 <div class="form-actions">
                   <cfm-button type="submit" [disabled]="!canManageOrganization || organizationSiteSaving || !canCreateSite">
-                    {{ organizationSiteSaving ? "Création..." : "Ajouter le site" }}
+                    {{ organizationSiteSaving ? "Création en cours" : "Ajouter le site" }}
                   </cfm-button>
                 </div>
               </form>
@@ -1996,7 +2028,7 @@ type DashboardCustomerOverviewItem = {
                   >
                     {{
                       organizationSiteStatusBusyId === site.id
-                        ? "Mise à jour..."
+                        ? "Mise à jour en cours"
                         : site.status === 'active'
                           ? "Archiver"
                           : "Réactiver"
@@ -2067,7 +2099,10 @@ type DashboardCustomerOverviewItem = {
               </ul>
 
               <ng-template #noBuildingSafetyAlerts>
-                <p class="small">Aucune alerte simple détectée pour le filtre actuel.</p>
+                <cfm-empty-state
+                  title="Aucune alerte sur ce filtre"
+                  description="Les alertes sécurité bâtiment apparaitront ici dès qu’un contrôle demande une action."
+                />
               </ng-template>
 
               <form class="building-safety-form" (ngSubmit)="saveBuildingSafetyItem()">
@@ -2160,7 +2195,7 @@ type DashboardCustomerOverviewItem = {
                   >
                     {{
                       buildingSafetySaving
-                        ? (isBuildingSafetyEditing ? "Enregistrement..." : "Ajout...")
+                        ? (isBuildingSafetyEditing ? "Enregistrement en cours" : "Ajout en cours")
                         : (isBuildingSafetyEditing ? "Enregistrer les changements" : "Ajouter l’élément")
                     }}
                   </cfm-button>
@@ -2220,7 +2255,7 @@ type DashboardCustomerOverviewItem = {
                     >
                       {{
                         buildingSafetyStatusBusyId === item.id
-                          ? "Mise à jour..."
+                          ? "Mise à jour en cours"
                           : item.status === 'active'
                             ? "Archiver"
                             : "Réactiver"
@@ -2262,7 +2297,7 @@ type DashboardCustomerOverviewItem = {
                   [disabled]="!canReadOrganization || regulatoryExporting"
                   (click)="exportRegulatoryPdf()"
                 >
-                  {{ regulatoryExporting ? "Génération..." : "Exporter le PDF" }}
+                  {{ regulatoryExporting ? "Génération en cours" : "Exporter le PDF" }}
                 </cfm-button>
               </div>
 
@@ -2470,7 +2505,7 @@ type DashboardCustomerOverviewItem = {
                   >
                     {{
                       duerpSaving
-                        ? (duerpEditingId ? "Enregistrement..." : "Ajout...")
+                        ? (duerpEditingId ? "Enregistrement en cours" : "Ajout en cours")
                         : (duerpEditingId ? "Enregistrer les changements" : "Ajouter le risque")
                     }}
                   </cfm-button>
@@ -2527,7 +2562,7 @@ type DashboardCustomerOverviewItem = {
                     >
                       {{
                         duerpStatusBusyId === entry.id
-                          ? "Mise à jour..."
+                          ? "Mise à jour en cours"
                           : entry.status === 'active'
                             ? "Archiver"
                             : "Réactiver"
@@ -2658,7 +2693,7 @@ type DashboardCustomerOverviewItem = {
                     type="submit"
                     [disabled]="!canManageOrganization || regulatoryEvidenceSaving || !canCreateRegulatoryEvidence"
                   >
-                    {{ regulatoryEvidenceSaving ? "Ajout..." : "Ajouter la pièce" }}
+                    {{ regulatoryEvidenceSaving ? "Ajout en cours" : "Ajouter la pièce" }}
                   </cfm-button>
                 </div>
               </form>
@@ -2798,7 +2833,7 @@ type DashboardCustomerOverviewItem = {
                   >
                     {{
                       customerSaving
-                        ? (isCustomerEditing ? "Enregistrement..." : "Ajout...")
+                        ? (isCustomerEditing ? "Enregistrement en cours" : "Ajout en cours")
                         : (isCustomerEditing ? "Enregistrer les changements" : "Ajouter le client")
                     }}
                   </cfm-button>
@@ -3039,7 +3074,7 @@ type DashboardCustomerOverviewItem = {
                       type="submit"
                       [disabled]="!canManageOrganization || quoteSaving || !canCreateQuote"
                     >
-                      {{ quoteSaving ? "Ajout..." : "Créer le devis" }}
+                      {{ quoteSaving ? "Ajout en cours" : "Créer le devis" }}
                     </cfm-button>
                     <cfm-button
                       *ngIf="hasQuoteDraft"
@@ -3147,7 +3182,7 @@ type DashboardCustomerOverviewItem = {
                       [disabled]="quoteDuplicateBusyId === quote.id"
                       (click)="duplicateQuoteAsInvoice(quote)"
                     >
-                      {{ quoteDuplicateBusyId === quote.id ? "Création..." : "Créer une facture" }}
+                      {{ quoteDuplicateBusyId === quote.id ? "Création en cours" : "Créer une facture" }}
                     </cfm-button>
 
                     <cfm-button
@@ -3157,7 +3192,7 @@ type DashboardCustomerOverviewItem = {
                       [disabled]="quotePdfBusyId === quote.id"
                       (click)="exportQuotePdf(quote)"
                     >
-                      {{ quotePdfBusyId === quote.id ? "Génération..." : "Exporter le PDF" }}
+                      {{ quotePdfBusyId === quote.id ? "Génération en cours" : "Exporter le PDF" }}
                     </cfm-button>
 
                     <cfm-button
@@ -3169,7 +3204,7 @@ type DashboardCustomerOverviewItem = {
                     >
                       {{
                         quoteHistoryBusyId === quote.id
-                          ? "Chargement..."
+                          ? "Chargement en cours"
                           : (quoteHistoryOpenId === quote.id ? "Masquer l'historique" : "Voir l'historique")
                       }}
                     </cfm-button>
@@ -3321,7 +3356,7 @@ type DashboardCustomerOverviewItem = {
                         type="submit"
                         [disabled]="quoteEditingSaving || !canSaveQuoteEdit"
                       >
-                        {{ quoteEditingSaving ? "Enregistrement..." : "Enregistrer les modifications" }}
+                        {{ quoteEditingSaving ? "Enregistrement en cours" : "Enregistrer les modifications" }}
                       </cfm-button>
                       <cfm-button
                         type="button"
@@ -3503,7 +3538,7 @@ type DashboardCustomerOverviewItem = {
                       type="submit"
                       [disabled]="!canManageOrganization || invoiceSaving || !canCreateInvoice"
                     >
-                      {{ invoiceSaving ? "Ajout..." : "Créer la facture" }}
+                      {{ invoiceSaving ? "Ajout en cours" : "Créer la facture" }}
                     </cfm-button>
                     <cfm-button
                       *ngIf="hasInvoiceDraft"
@@ -3626,7 +3661,7 @@ type DashboardCustomerOverviewItem = {
                       [disabled]="invoicePdfBusyId === invoice.id"
                       (click)="exportInvoicePdf(invoice)"
                     >
-                      {{ invoicePdfBusyId === invoice.id ? "Génération..." : "Exporter le PDF" }}
+                      {{ invoicePdfBusyId === invoice.id ? "Génération en cours" : "Exporter le PDF" }}
                     </cfm-button>
 
                     <cfm-button
@@ -3638,7 +3673,7 @@ type DashboardCustomerOverviewItem = {
                     >
                       {{
                         invoiceHistoryBusyId === invoice.id
-                          ? "Chargement..."
+                          ? "Chargement en cours"
                           : (invoiceHistoryOpenId === invoice.id ? "Masquer l'historique" : "Voir l'historique")
                       }}
                     </cfm-button>
@@ -3672,7 +3707,7 @@ type DashboardCustomerOverviewItem = {
                           type="submit"
                           [disabled]="invoicePaymentBusyId === invoice.id || !canSaveInvoicePayment(invoice)"
                         >
-                          {{ invoicePaymentBusyId === invoice.id ? "Enregistrement..." : "Valider le paiement" }}
+                          {{ invoicePaymentBusyId === invoice.id ? "Enregistrement en cours" : "Valider le paiement" }}
                         </cfm-button>
                       </div>
                     </form>
@@ -3824,7 +3859,7 @@ type DashboardCustomerOverviewItem = {
                         type="submit"
                         [disabled]="invoiceEditingSaving || !canSaveInvoiceEdit"
                       >
-                        {{ invoiceEditingSaving ? "Enregistrement..." : "Enregistrer les modifications" }}
+                        {{ invoiceEditingSaving ? "Enregistrement en cours" : "Enregistrer les modifications" }}
                       </cfm-button>
                       <cfm-button
                         type="button"
@@ -4026,7 +4061,7 @@ type DashboardCustomerOverviewItem = {
                           [disabled]="worksiteDocumentPdfBusyId === item.id"
                           (click)="exportWorksiteSummaryPdf(item.id)"
                         >
-                          {{ worksiteDocumentPdfBusyId === item.id ? "Génération..." : "Fiche chantier PDF" }}
+                          {{ worksiteDocumentPdfBusyId === item.id ? "Génération en cours" : "Fiche chantier PDF" }}
                         </cfm-button>
 
                         <cfm-button
@@ -4154,7 +4189,7 @@ type DashboardCustomerOverviewItem = {
                           >
                             {{
                               worksiteCoordinationBusyId === item.id
-                                ? "Enregistrement..."
+                                ? "Enregistrement en cours"
                                 : "Enregistrer"
                             }}
                           </cfm-button>
@@ -4226,6 +4261,14 @@ type DashboardCustomerOverviewItem = {
       .workspace-page {
         display: grid;
         gap: 1.4rem;
+      }
+
+      .workspace-feedback-stack {
+        width: min(1100px, 100%);
+        display: grid;
+        gap: 0.55rem;
+        margin-top: 0.55rem;
+        align-content: start;
       }
 
       .desktop-card {
@@ -4348,45 +4391,130 @@ type DashboardCustomerOverviewItem = {
 
       .session-header {
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 1rem;
+        gap: 0.58rem;
         align-items: start;
       }
 
       .session-actions {
-        gap: 1rem;
+        gap: 0.55rem;
         justify-items: end;
+        min-width: 0;
       }
 
       .workspace-shell-copy,
       .workspace-shell-actions {
         display: grid;
-        gap: 0.8rem;
+        gap: 0.38rem;
+        min-width: 0;
+      }
+
+      .workspace-shell-meta {
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        line-height: 1.25;
       }
 
       .app-nav {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.8rem;
-        padding: 0.35rem 0.15rem 0.2rem;
+        align-items: center;
+        gap: 0.4rem;
+        min-width: 0;
+        margin-top: -0.24rem;
+        padding: 0.28rem 0.38rem 0.34rem;
+        border: 1px solid rgba(137, 160, 149, 0.12);
+        border-radius: 1rem;
+        background:
+          linear-gradient(180deg, rgba(252, 253, 252, 0.94), rgba(246, 249, 247, 0.97));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 4px 10px rgba(18, 33, 42, 0.028);
       }
 
       .app-nav-link {
         display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        padding: 0.18rem 0.22rem;
+        border-radius: 999px;
         text-decoration: none;
-        transition: transform 0.16s ease, opacity 0.16s ease;
+        opacity: 0.96;
+        transition:
+          transform 0.16s ease,
+          opacity 0.16s ease,
+          background-color 0.16s ease,
+          box-shadow 0.16s ease;
       }
 
       .app-nav-link:hover {
         transform: translateY(-1px);
+        background: rgba(137, 160, 149, 0.09);
       }
 
       .app-nav-link.is-active {
         transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow:
+          inset 0 0 0 1px rgba(137, 160, 149, 0.2),
+          0 6px 14px rgba(18, 33, 42, 0.04);
+      }
+
+      .nav-icon-placeholder {
+        display: none;
       }
 
       .meta,
       .small {
-        margin-top: 0.45rem;
+        margin-top: 0.16rem;
+      }
+
+      @media (max-width: 1280px) {
+        .session-header {
+          grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
+          gap: 0.5rem;
+        }
+
+        .workspace-shell-copy,
+        .workspace-shell-actions {
+          gap: 0.32rem;
+        }
+
+        .session-actions {
+          gap: 0.46rem;
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .session-header {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0.44rem;
+        }
+
+        .session-actions {
+          justify-items: start;
+          gap: 0.42rem;
+        }
+
+        .workspace-shell-copy,
+        .workspace-shell-actions {
+          gap: 0.28rem;
+        }
+
+        .app-nav {
+          margin-top: -0.18rem;
+          padding: 0.24rem 0.32rem 0.3rem;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .app-nav {
+          gap: 0.3rem;
+          padding: 0.22rem 0.26rem 0.28rem;
+        }
+
+        .app-nav-link {
+          padding: 0.14rem 0.18rem;
+        }
       }
 
       .grid {
@@ -4991,6 +5119,10 @@ type DashboardCustomerOverviewItem = {
         animation: feedbackPulse 220ms ease;
       }
 
+      .workspace-feedback-stack .feedback {
+        margin-top: 0;
+      }
+
       .feedback::before {
         content: "";
         position: absolute;
@@ -5005,26 +5137,54 @@ type DashboardCustomerOverviewItem = {
 
       .feedback.error {
         color: #8a2d2d;
+        border-color: rgba(138, 45, 45, 0.16);
         background:
           linear-gradient(180deg, rgba(254, 243, 241, 0.98), rgba(255, 255, 255, 0.88));
       }
 
       .feedback.success {
         color: #1f6a47;
+        border-color: rgba(31, 106, 71, 0.16);
         background:
           linear-gradient(180deg, rgba(239, 250, 245, 0.98), rgba(255, 255, 255, 0.88));
       }
 
       .feedback.progress {
         color: #7c5b20;
+        border-color: rgba(124, 91, 32, 0.18);
         background:
           linear-gradient(180deg, rgba(255, 247, 228, 0.98), rgba(255, 255, 255, 0.88));
       }
 
+      .feedback-title,
+      .feedback-body {
+        margin: 0;
+      }
+
+      .feedback-title {
+        font-size: 0.84rem;
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .feedback-body {
+        line-height: 1.4;
+      }
+
       .loading-state-card {
         display: grid;
-        gap: 1rem;
+        gap: 0.85rem;
         padding: 0.15rem 0 0.2rem;
+      }
+
+      .loading-state-skeleton,
+      .loading-state-copy {
+        display: grid;
+      }
+
+      .loading-state-skeleton {
+        gap: 1rem;
       }
 
       .loading-state-hero,
@@ -5069,6 +5229,19 @@ type DashboardCustomerOverviewItem = {
 
       .loading-state-lines span:nth-child(3) {
         width: 68%;
+      }
+
+      .loading-state-copy {
+        gap: 0.24rem;
+        max-width: 44ch;
+      }
+
+      .loading-state-label {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.25;
+        font-weight: 650;
+        color: #17312b;
       }
 
       @keyframes skeletonPulse {
@@ -7771,7 +7944,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.worksiteDocumentPdfBusyId = worksiteId;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation de la fiche chantier PDF...";
+    this.feedbackMessage = "Fiche chantier PDF en préparation.";
     try {
       const { blob, fileName } = await downloadWorksiteSummaryPdf(
         this.accessToken,
@@ -7795,7 +7968,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.worksitePreventionPlanPdfBusyId = worksiteId;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation du plan de prévention PDF...";
+    this.feedbackMessage = "Plan de prévention PDF en préparation.";
     try {
       const { blob, fileName } = await downloadWorksitePreventionPlanPdf(
         this.accessToken,
@@ -7819,7 +7992,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.worksiteDocumentDownloadBusyId = document.id;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation du document chantier...";
+    this.feedbackMessage = "Document chantier en préparation.";
     try {
       const { blob, fileName } = await downloadGeneratedWorksiteDocument(
         this.accessToken,
@@ -8070,7 +8243,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.worksitePreventionPlanPdfBusyId = worksiteId;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation du plan de prévention PDF avec vos ajustements...";
+    this.feedbackMessage = "Plan de prévention PDF en préparation avec vos ajustements.";
     try {
       const payload: WorksitePreventionPlanExportRequest = {
         useful_date: this.normalizeOptionalText(this.worksitePreventionPlanForm.usefulDate),
@@ -8204,7 +8377,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.quotePdfBusyId = quote.id;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation du PDF devis...";
+    this.feedbackMessage = "PDF devis en préparation.";
     try {
       const { blob, fileName } = await downloadQuotePdf(this.accessToken, this.selectedOrganizationId, quote.id);
       this.downloadBlob(blob, fileName);
@@ -8375,7 +8548,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.invoicePdfBusyId = invoice.id;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation du PDF facture...";
+    this.feedbackMessage = "PDF facture en préparation.";
     try {
       const { blob, fileName } = await downloadInvoicePdf(this.accessToken, this.selectedOrganizationId, invoice.id);
       this.downloadBlob(blob, fileName);
@@ -8716,7 +8889,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     this.regulatoryExporting = true;
     this.errorMessage = "";
-    this.feedbackMessage = "Préparation de l'export réglementaire PDF...";
+    this.feedbackMessage = "Export réglementaire PDF en préparation.";
     try {
       const { blob, fileName } = await downloadRegulatoryExportPdf(this.accessToken, this.selectedOrganizationId);
       const objectUrl = window.URL.createObjectURL(blob);

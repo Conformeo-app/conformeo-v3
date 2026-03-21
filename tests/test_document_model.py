@@ -75,6 +75,7 @@ class DocumentModelTest(unittest.TestCase):
                 size_bytes=245760,
                 storage_key="documents/demo/facade-avant.jpg",
                 checksum="sha256:demo",
+                content_bytes=b"demo-bytes",
             )
             session.add(document)
             session.commit()
@@ -92,6 +93,7 @@ class DocumentModelTest(unittest.TestCase):
         self.assertEqual(stored_document.file_name, "facade-avant.jpg")
         self.assertEqual(stored_document.size_bytes, 245760)
         self.assertEqual(stored_document.storage_key, "documents/demo/facade-avant.jpg")
+        self.assertEqual(stored_document.content_bytes, b"demo-bytes")
         self.assertIsNotNone(stored_document.created_at)
         self.assertIsNotNone(stored_document.updated_at)
 

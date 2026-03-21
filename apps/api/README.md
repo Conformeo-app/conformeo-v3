@@ -26,6 +26,36 @@ GET /organizations/{organization_id}/worksites
 
 Ce point de lecture fournit seulement des résumés chantier pour alimenter le mobile et son stockage local hors ligne.
 
+Extensions documentaires légères sur le module Chantier :
+
+```bash
+GET /organizations/{organization_id}/worksite-documents
+GET /organizations/{organization_id}/worksite-documents/{document_id}/download
+GET /organizations/{organization_id}/worksites/{worksite_id}/summary.pdf
+GET /organizations/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf
+POST /organizations/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf
+```
+
+Ce bloc reste volontairement simple :
+- les PDF chantier peuvent créer ou mettre à jour un `Document` léger explicitement rattaché au chantier
+- le dernier PDF généré est désormais conservé sur ce `Document` pour une récupération plus stable
+- les documents chantier générés peuvent être marqués `draft` ou `finalized`
+- pas de GED
+- pas de versioning documentaire riche
+
+Sprint 8 ajoute un résumé cockpit léger :
+
+```bash
+GET /organizations/{organization_id}/cockpit-summary
+```
+
+Ce point couvre seulement :
+- les KPI utiles de la vue d'ensemble
+- les alertes simples
+- la synthèse par module
+
+Les vues cockpit plus détaillées restent volontairement assemblées côté desktop.
+
 Sprint 2 ajoute une première fondation Réglementation :
 
 ```bash
@@ -187,3 +217,65 @@ Exemple :
 ```bash
 GET /organizations/{organization_id}/audit-logs?limit=10&target_id=<quote_id>&target_type=quote&target_type=quote_worksite_link
 ```
+
+## Documents métier simples
+
+Sprint 5 ajoute un premier document transverse, sans moteur documentaire complexe :
+- `GET /organizations/{organization_id}/worksites/{worksite_id}/summary.pdf`
+- `GET /organizations/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf`
+- `POST /organizations/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf`
+
+Le PDF chantier réutilise :
+- l'identification entreprise
+- le résumé chantier
+- les devis liés si `facturation` est activé
+- les factures liées si `facturation` est activé
+
+Le plan de prévention simplifié réutilise :
+- l'entreprise intervenante
+- le chantier
+- le donneur d'ordre si le client Facturation correspondant est connu
+- les contacts utiles disponibles
+- un contexte d'intervention, des points de vigilance et des consignes simples
+
+Le `POST` permet seulement un ajustement léger avant export :
+- date utile
+- contexte
+- points de vigilance
+- mesures / consignes
+- contact utile complémentaire
+
+Le document reste volontairement simple :
+- structure textuelle
+- stockage léger du dernier PDF généré uniquement pour les documents chantier
+- aucun template avancé
+
+Les documents chantier générés sont aussi relus de manière légère :
+- `GET /organizations/{organization_id}/worksite-documents`
+- `PATCH /organizations/{organization_id}/worksite-documents/{document_id}/status`
+- `GET /organizations/{organization_id}/worksite-signatures`
+- `PATCH /organizations/{organization_id}/worksite-documents/{document_id}/signature`
+- `GET /organizations/{organization_id}/worksite-proofs`
+- `PATCH /organizations/{organization_id}/worksite-documents/{document_id}/proofs`
+
+Le lien `document chantier -> signature` reste volontairement simple :
+- uniquement vers une signature déjà existante
+- uniquement si elle appartient au même chantier
+- aucune logique de certification ou de signature électronique avancée
+
+Le lien `document chantier -> preuves` reste tout aussi léger :
+- uniquement vers des preuves déjà existantes
+- uniquement si elles appartiennent au même chantier
+- plusieurs preuves peuvent être liées
+- aucune GED ni logique de preuve avancée
+
+Sprint 7 ajoute une coordination simple sur les objets chantier déjà visibles :
+- `GET /organizations/{organization_id}/worksite-assignees`
+- `PATCH /organizations/{organization_id}/worksites/{worksite_id}/coordination`
+- `PATCH /organizations/{organization_id}/worksite-documents/{document_id}/coordination`
+
+Ce bloc couvre uniquement :
+- une affectation simple vers un membre existant
+- un commentaire court
+- un suivi `a faire / en cours / fait`
+- aucune logique de task manager ou de workflow complexe

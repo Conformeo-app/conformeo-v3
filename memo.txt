@@ -1,0 +1,4 @@
+psql -d conformeo_v3
+pnpm run dev:web
+pnpm run dev:mobile
+pnpm run dev:api

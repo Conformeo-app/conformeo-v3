@@ -71,7 +71,7 @@ export function getGlobalSyncStatusCopy(
       label: "à vérifier",
       tone: "warning",
       detail: isOnline
-        ? "Certaines mises à jour ont besoin d’une vérification avant de repartir."
+        ? "Certaines actions locales demandent une vérification avant de repartir."
         : "Certaines mises à jour sont à vérifier, mais tout reste enregistré sur l’appareil."
     };
   }
@@ -81,7 +81,7 @@ export function getGlobalSyncStatusCopy(
       label: "en attente de synchronisation",
       tone: "progress",
       detail: isOnline
-        ? "Des mises à jour locales sont prêtes pour un prochain passage de synchronisation."
+        ? "Des actions locales sont prêtes à repartir dès que possible."
         : "Pas de réseau : vous pouvez continuer, les changements restent bien enregistrés sur l’appareil."
     };
   }
@@ -90,7 +90,7 @@ export function getGlobalSyncStatusCopy(
     return {
       label: "synchronisé",
       tone: "success",
-      detail: "Les dernières opérations connues sont traitées côté appareil."
+      detail: "Les actions locales déjà suivies sont traitées pour le moment."
     };
   }
 
@@ -116,7 +116,7 @@ export function getRecordSyncStatusCopy(
     return {
       label: "à vérifier",
       tone: "warning",
-      detail: "Cette donnée locale a rencontré un souci et doit être vérifiée."
+      detail: "Cet élément local demande une vérification avant le prochain envoi."
     };
   }
 
@@ -130,7 +130,7 @@ export function getRecordSyncStatusCopy(
     return {
       label: "en attente de synchronisation",
       tone: "progress",
-      detail: "Cette donnée est bien enregistrée sur l’appareil en attendant le prochain envoi."
+      detail: "Cet élément est bien enregistré sur l’appareil et attend son prochain envoi."
     };
   }
 
@@ -138,7 +138,7 @@ export function getRecordSyncStatusCopy(
     return {
       label: "synchronisé",
       tone: "success",
-      detail: "Cette donnée locale ne demande plus d’action immédiate."
+      detail: "Cet élément local est déjà pris en compte pour le moment."
     };
   }
 
@@ -156,7 +156,7 @@ export function getOperationSyncStatusCopy(
     return {
       label: "à vérifier",
       tone: "warning",
-      detail: "La dernière tentative n’a pas abouti."
+      detail: "La dernière tentative demande une vérification."
     };
   }
 
@@ -164,14 +164,17 @@ export function getOperationSyncStatusCopy(
     return {
       label: "synchronisé",
       tone: "success",
-      detail: "L’opération locale est marquée comme traitée."
+      detail: "Cette action locale est considérée comme traitée."
     };
   }
 
   return {
     label: "en attente de synchronisation",
     tone: "progress",
-    detail: "L’opération reste dans la file locale."
+    detail:
+      operation.status === "in_progress"
+        ? "Cette action locale est en cours de reprise."
+        : "Cette action locale reste prête à repartir."
   };
 }
 
@@ -226,8 +229,8 @@ export function getPreparedWorksiteSyncItemStatusCopy(
     tone: "progress",
     detail:
       item.status === "in_progress"
-        ? "Ce lot terrain est déjà en préparation locale."
-        : "Ce lot terrain est prêt sur l’appareil pour un futur envoi."
+        ? "Ce lot terrain est en cours de préparation sur l’appareil."
+        : "Ce lot terrain est prêt à repartir depuis l’appareil."
   };
 }
 
@@ -238,7 +241,7 @@ export function getPreparedWorksiteSyncBatchStatusCopy(
     return {
       label: "enregistré sur l’appareil",
       tone: "calm",
-      detail: "Aucun lot terrain n’attend de départ pour le moment."
+      detail: "Aucun lot terrain n’est prêt à repartir pour le moment."
     };
   }
 
@@ -253,7 +256,7 @@ export function getPreparedWorksiteSyncBatchStatusCopy(
   return {
     label: "en attente de synchronisation",
     tone: "progress",
-    detail: "Des lots terrain sont déjà prêts sur l’appareil pour un futur envoi."
+    detail: "Des lots terrain sont déjà prêts à repartir depuis l’appareil."
   };
 }
 
@@ -304,6 +307,7 @@ export function getWorksiteSyncStatusCopy(
   const hasPendingTerrainSync =
     hasPendingOperations(relevantOperations) ||
     relevantPreparedItems.length > 0 ||
+    worksite.recent_equipment_movements.some((movement) => movement.sync_status === "pending_sync") ||
     worksite.recent_proofs.some((proof) => proof.sync_status === "pending_sync") ||
     worksite.recent_voice_notes.some((voiceNote) => voiceNote.sync_status === "pending_sync") ||
     worksite.recent_signatures.some((signature) => signature.sync_status === "pending_sync") ||
@@ -316,7 +320,7 @@ export function getWorksiteSyncStatusCopy(
       label: "en attente de synchronisation",
       tone: "progress",
       detail: isOnline
-        ? "Des éléments de ce chantier sont prêts à partir lors du prochain envoi."
+        ? "Des éléments de ce chantier sont prêts à repartir dès que possible."
         : "Pas de réseau : les éléments de ce chantier restent bien enregistrés sur l’appareil en attendant le prochain envoi."
     };
   }
@@ -343,7 +347,7 @@ export function getWorksiteSyncStatusCopy(
     return {
       label: "synchronisé",
       tone: "success",
-      detail: "Les éléments terrain visibles pour ce chantier ne demandent plus d’action locale immédiate."
+      detail: "Les éléments visibles de ce chantier sont déjà pris en compte pour le moment."
     };
   }
 

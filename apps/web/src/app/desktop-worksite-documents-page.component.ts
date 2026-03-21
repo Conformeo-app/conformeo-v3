@@ -169,7 +169,7 @@ import { DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT } from "./desktop-worksite-docu
                 >
                   {{
                     ctx.isWorksiteDocumentDownloadBusy(document)
-                      ? "Téléchargement..."
+                      ? "Téléchargement en cours"
                       : ctx.getWorksiteDocumentActionLabel(document)
                   }}
                 </cfm-button>
@@ -263,7 +263,10 @@ import { DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT } from "./desktop-worksite-docu
           </ul>
 
           <ng-template #emptyStandaloneWorksiteDocuments>
-            <p class="small">Aucun document chantier à consulter pour le filtre actuel.</p>
+            <cfm-empty-state
+              title="Aucun document pour ce filtre"
+              description="Ajustez les filtres ou générez un document chantier pour le retrouver ici."
+            />
           </ng-template>
         </ng-container>
 

@@ -59,3 +59,27 @@ La zone `Synchronisation terrain preparee` expose aussi un etat lisible :
 - l'absence de reseau ne bloque pas les flux existants
 - le rendu reste coherent entre preuves, notes, checklist, risques et signatures
 - la structure reste directement reutilisable pour un futur executant de synchronisation distante
+
+## Raffinement Sprint 6
+
+Le wording visible est encore simplifie sur la surface mobile :
+
+- la zone de suivi parle d'`actions locales a synchroniser` plutot que de queue technique
+- les types d'action sont relus en langage simple : creation, mise a jour, retrait, media a envoyer, changement d'etat
+- les entites brutes ne sont plus affichees telles quelles quand une lecture metier plus simple existe
+- les derniers soucis reseau sont reformules de maniere plus utile pour l'utilisateur
+- des retours courts confirment qu'une action reste bien enregistree sur l'appareil, en attente, synchronisee ou a verifier
+
+## Controle Sprint 7
+
+Le controle de coherence reste volontairement cible :
+
+- le statut visible d'un chantier tient aussi compte des mouvements d'equipement encore en attente de synchronisation
+- les retours apres action locale rappellent plus explicitement si l'element reste en attente de synchronisation
+- la zone des actions locales garde un vocabulaire simple (`pret a envoyer`, `pret a relancer`, `tentative x sur y`) au lieu d'un langage plus technique
+
+Le moteur de synchronisation ne change pas :
+
+- aucun nouveau transport
+- aucune file supplementaire
+- aucun monitoring complexe

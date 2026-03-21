@@ -45,6 +45,10 @@ Sprint 1 ouvre un premier bloc Chantier mobile :
 - signature simple tactile, liée au chantier, stockée localement et visible immédiatement sur l'appareil
 - préparation locale consolidée des synchronisations terrain pour preuves, notes, checklist, signalements et signatures
 - état de synchronisation lisible et harmonisé au niveau chantier, objet terrain et lot préparé
+- lecture plus claire des actions locales à synchroniser avec libellés non techniques et retours simples après action
+- contrôle léger de cohérence sur les états de synchronisation visibles, avec feedback plus explicite après action locale
+- statut chantier harmonisé avec les mouvements d'équipement encore en attente de synchronisation
+- harmonisation visible de quelques patterns UI avec le desktop sur les retours système, cartes rapides et blocs de lecture terrain
 
 Sprint 0 utilise aussi `@conformeo/ui` pour partager quelques primitives Angular simples :
 - `Button`

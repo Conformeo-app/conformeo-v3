@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import logging
+import re
+from time import perf_counter
+import unicodedata
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -38,7 +42,34 @@ from app.core.regulatory_evidence import (
     list_regulatory_evidence_documents,
     serialize_regulatory_evidence,
 )
+from app.core.worksite_documents import (
+    WORKSITE_DOCUMENT_LIFECYCLE_STATUSES,
+    WORKSITE_PREVENTION_PLAN_DOCUMENT_TYPE,
+    WORKSITE_SUMMARY_DOCUMENT_TYPE,
+    build_worksite_document_storage_key,
+    get_worksite_document_or_404,
+    get_worksite_proof_document,
+    get_worksite_signature_document,
+    list_worksite_documents,
+    list_worksite_proofs,
+    list_worksite_signatures,
+    register_generated_worksite_document,
+    serialize_worksite_document,
+    serialize_worksite_proof,
+    serialize_worksite_signature,
+    store_generated_worksite_document_content,
+)
+from app.core.worksite_coordination import (
+    WORKSITE_COORDINATION_STATUSES,
+    WORKSITE_COORDINATION_TARGET_DOCUMENT,
+    WORKSITE_COORDINATION_TARGET_WORKSITE,
+    build_worksite_coordination_index,
+    ensure_worksite_coordination_item,
+    list_worksite_coordination_items,
+    serialize_worksite_coordination,
+)
 from app.core.worksites import get_worksite_summary, list_worksite_lookup, list_worksite_summaries
+from app.core.worksite_export_pdf import build_worksite_prevention_plan_pdf, build_worksite_summary_pdf
 from app.db.models import (
     AuditAction,
     BillingCustomer,
@@ -50,11 +81,14 @@ from app.db.models import (
     DuerpEntryStatus,
     Invoice,
     InvoiceStatus,
+    OrganizationMembership,
     OrganizationModuleCode,
     OrganizationSite,
     OrganizationSiteStatus,
     Quote,
     QuoteStatus,
+    User,
+    UserStatus,
 )
 from app.db.session import get_db_session
 from app.schemas.audit_log import AuditLogRead
@@ -70,6 +104,7 @@ from app.schemas.building_safety import (
     BuildingSafetyItemRead,
     BuildingSafetyItemUpdateRequest,
 )
+from app.schemas.cockpit import CockpitSummaryRead
 from app.schemas.organization import OrganizationProfileUpdateRequest, OrganizationRead
 from app.schemas.organization_module import OrganizationModuleRead
 from app.schemas.organization_site import (
@@ -97,13 +132,27 @@ from app.schemas.quote import (
     QuoteWorksiteLinkUpdateRequest,
 )
 from app.schemas.regulatory_evidence import RegulatoryEvidenceCreateRequest, RegulatoryEvidenceRead
-from app.schemas.worksite import WorksiteSummaryRead
+from app.schemas.worksite import (
+    WorksiteAssigneeRead,
+    WorksiteCoordinationUpdateRequest,
+    WorksiteDocumentRead,
+    WorksiteDocumentProofUpdateRequest,
+    WorksiteDocumentSignatureUpdateRequest,
+    WorksiteDocumentStatusUpdateRequest,
+    WorksitePreventionPlanExportRequest,
+    WorksiteProofRead,
+    WorksiteSignatureRead,
+    WorksiteSummaryRead,
+)
 
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
+logger = logging.getLogger(__name__)
 
 require_billing_read = require_module_enabled(OrganizationModuleCode.FACTURATION, "organization:read")
 require_billing_write = require_module_enabled(OrganizationModuleCode.FACTURATION, "organization:update")
+require_chantier_read = require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+require_chantier_write = require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:update")
 
 
 def normalize_optional_text(value: str | None) -> str | None:
@@ -111,6 +160,41 @@ def normalize_optional_text(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def normalize_search_text(value: str | None) -> str:
+    if value is None:
+        return ""
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_value).strip().lower()
+
+
+def slugify_filename(value: str, fallback: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_value).strip("-").lower()
+    return slug or fallback
+
+
+def find_worksite_billing_customer(
+    db: Session,
+    organization_id: UUID,
+    client_name: str,
+) -> dict[str, object | None] | None:
+    target_name = normalize_search_text(client_name)
+    if not target_name:
+        return None
+
+    customer = next(
+        (
+            item
+            for item in list_billing_customers(db, organization_id)
+            if normalize_search_text(item.name) == target_name
+        ),
+        None,
+    )
+    return serialize_billing_customer(customer) if customer is not None else None
 
 
 def serialize_change_value(value: object | None) -> object | None:
@@ -219,6 +303,232 @@ def get_worksite_name_or_404(organization_id: UUID, worksite_id: UUID | None) ->
     return str(worksite["name"])
 
 
+def list_active_worksite_assignees(db: Session, organization_id: UUID) -> list[OrganizationMembership]:
+    memberships = (
+        db.execute(
+            select(OrganizationMembership)
+            .options(selectinload(OrganizationMembership.user))
+            .where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.deleted_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sorted(
+        (
+            membership
+            for membership in memberships
+            if membership.user is not None
+            and membership.user.deleted_at is None
+            and membership.user.status == UserStatus.ACTIVE
+        ),
+        key=lambda membership: (
+            membership.user.display_name.lower(),
+            membership.role_code,
+        ),
+    )
+
+
+def build_worksite_summary_document_bundle(
+    db: Session,
+    organization_id: UUID,
+    organization: object,
+    worksite_id: UUID,
+) -> tuple[dict[str, object], bytes, str, str]:
+    worksite = get_worksite_summary(organization_id, worksite_id)
+    if worksite is None:
+        raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
+
+    modules = list_organization_modules(db, organization_id)
+    billing_module = next(
+        (module for module in modules if module.module_code == OrganizationModuleCode.FACTURATION),
+        None,
+    )
+    include_billing_documents = bool(billing_module and billing_module.is_enabled)
+    quote_documents: list[dict[str, object]] = []
+    invoice_documents: list[dict[str, object]] = []
+    worksite_name = str(worksite["name"])
+
+    if include_billing_documents:
+        quote_documents = [
+            serialize_quote(quote, worksite_name=worksite_name)
+            for quote in list_quotes_for_organization(db, organization_id)
+            if quote.worksite_id == worksite_id
+        ]
+        invoice_documents = [
+            serialize_invoice(invoice, worksite_name=worksite_name)
+            for invoice in list_invoices_for_organization(db, organization_id)
+            if invoice.worksite_id == worksite_id
+        ]
+
+    pdf_bytes = build_worksite_summary_pdf(
+        organization,
+        worksite,
+        quote_documents,
+        invoice_documents,
+        include_billing_documents=include_billing_documents,
+    )
+    filename = f"fiche-chantier-{slugify_filename(str(worksite['name']), 'chantier')}.pdf"
+    notes = "Fiche chantier generee depuis la vue chantier."
+    return worksite, pdf_bytes, filename, notes
+
+
+def build_worksite_prevention_plan_document_bundle(
+    db: Session,
+    organization_id: UUID,
+    organization: object,
+    worksite_id: UUID,
+    *,
+    payload: WorksitePreventionPlanExportRequest | None = None,
+) -> tuple[dict[str, object], bytes, str, str]:
+    worksite = get_worksite_summary(organization_id, worksite_id)
+    if worksite is None:
+        raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
+
+    modules = list_organization_modules(db, organization_id)
+    billing_module = next(
+        (module for module in modules if module.module_code == OrganizationModuleCode.FACTURATION),
+        None,
+    )
+    matched_customer = (
+        find_worksite_billing_customer(db, organization_id, str(worksite["client_name"]))
+        if billing_module and billing_module.is_enabled
+        else None
+    )
+    pdf_bytes = build_worksite_prevention_plan_pdf(
+        organization,
+        worksite,
+        matched_customer,
+        useful_date=payload.useful_date if payload is not None else None,
+        intervention_context=payload.intervention_context if payload is not None else None,
+        vigilance_points=payload.vigilance_points if payload is not None else None,
+        measure_points=payload.measure_points if payload is not None else None,
+        additional_contact=payload.additional_contact if payload is not None else None,
+    )
+    filename = f"plan-prevention-{slugify_filename(str(worksite['name']), 'chantier')}.pdf"
+    notes = "Plan de prevention simplifie genere depuis le chantier."
+    return worksite, pdf_bytes, filename, notes
+
+
+def resolve_worksite_assignee_or_404(
+    db: Session,
+    organization_id: UUID,
+    user_id: UUID | None,
+) -> OrganizationMembership | None:
+    if user_id is None:
+        return None
+
+    membership = next(
+        (
+            item
+            for item in list_active_worksite_assignees(db, organization_id)
+            if item.user_id == user_id
+        ),
+        None,
+    )
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Membre introuvable pour cette organisation.")
+    return membership
+
+
+def serialize_worksite_document_read(
+    db: Session,
+    organization_id: UUID,
+    document: Document,
+    *,
+    coordination_index: dict[tuple[str, UUID], object] | None = None,
+) -> WorksiteDocumentRead:
+    linked_signature = None
+    if document.linked_signature_document_id is not None:
+        linked_signature = get_worksite_signature_document(
+            db,
+            organization_id,
+            document.linked_signature_document_id,
+        )
+    linked_proofs: list[Document] = []
+    for proof_document_id in document.linked_proof_document_ids or []:
+        try:
+            resolved_proof_document_id = UUID(str(proof_document_id))
+        except (TypeError, ValueError):
+            continue
+        linked_proof = get_worksite_proof_document(
+            db,
+            organization_id,
+            resolved_proof_document_id,
+        )
+        if linked_proof is not None:
+            linked_proofs.append(linked_proof)
+
+    resolved_coordination_index = coordination_index or build_worksite_coordination_index(
+        list_worksite_coordination_items(db, organization_id)
+    )
+    coordination_item = resolved_coordination_index.get(
+        (WORKSITE_COORDINATION_TARGET_DOCUMENT, document.id)
+    )
+    assignee_display_name = None
+    if coordination_item is not None:
+        if getattr(coordination_item, "assignee_user", None) is not None:
+            assignee_display_name = coordination_item.assignee_user.display_name
+        elif coordination_item.assignee_user_id is not None:
+            assignee_user = db.get(User, coordination_item.assignee_user_id)
+            if assignee_user is not None and assignee_user.deleted_at is None and assignee_user.status == UserStatus.ACTIVE:
+                assignee_display_name = assignee_user.display_name
+
+    return WorksiteDocumentRead.model_validate(
+        serialize_worksite_document(
+            document,
+            worksite_name=get_worksite_name_or_404(organization_id, document.attached_to_entity_id) or "Chantier",
+            linked_signature=linked_signature,
+            linked_proofs=linked_proofs,
+        )
+        | {
+            "coordination": serialize_worksite_coordination(
+                coordination_item,
+                target_type=WORKSITE_COORDINATION_TARGET_DOCUMENT,
+                target_id=document.id,
+                assignee_display_name_override=assignee_display_name,
+            )
+        }
+    )
+
+
+def serialize_worksite_summary_read(
+    db: Session,
+    organization_id: UUID,
+    worksite: dict[str, object],
+    *,
+    coordination_index: dict[tuple[str, UUID], object] | None = None,
+) -> WorksiteSummaryRead:
+    worksite_id = UUID(str(worksite["id"]))
+    resolved_coordination_index = coordination_index or build_worksite_coordination_index(
+        list_worksite_coordination_items(db, organization_id)
+    )
+    coordination_item = resolved_coordination_index.get(
+        (WORKSITE_COORDINATION_TARGET_WORKSITE, worksite_id)
+    )
+    assignee_display_name = None
+    if coordination_item is not None:
+        if getattr(coordination_item, "assignee_user", None) is not None:
+            assignee_display_name = coordination_item.assignee_user.display_name
+        elif coordination_item.assignee_user_id is not None:
+            assignee_user = db.get(User, coordination_item.assignee_user_id)
+            if assignee_user is not None and assignee_user.deleted_at is None and assignee_user.status == UserStatus.ACTIVE:
+                assignee_display_name = assignee_user.display_name
+    return WorksiteSummaryRead.model_validate(
+        worksite
+        | {
+            "coordination": serialize_worksite_coordination(
+                coordination_item,
+                target_type=WORKSITE_COORDINATION_TARGET_WORKSITE,
+                target_id=worksite_id,
+                assignee_display_name_override=assignee_display_name,
+            )
+        }
+    )
+
+
 def list_quotes_for_organization(db: Session, organization_id: UUID) -> list[Quote]:
     return (
         db.execute(
@@ -278,6 +588,504 @@ def build_evidence_support_maps(
     return site_lookup, building_safety_lookup, duerp_lookup, obligation_titles
 
 
+def is_module_enabled(modules: list[object], module_code: OrganizationModuleCode) -> bool:
+    return any(
+        getattr(module, "module_code", None) == module_code and bool(getattr(module, "is_enabled", False))
+        for module in modules
+    )
+
+
+def format_cockpit_amount_cents(amount_cents: int, currency: str = "EUR") -> str:
+    amount = amount_cents / 100
+    formatted_amount = f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+    if currency == "EUR":
+        return f"{formatted_amount} €"
+    return f"{formatted_amount} {currency}"
+
+
+def build_cockpit_summary(
+    db: Session,
+    organization_id: UUID,
+    organization: object,
+) -> CockpitSummaryRead:
+    modules = list_organization_modules(db, organization_id)
+    regulation_enabled = is_module_enabled(modules, OrganizationModuleCode.REGLEMENTATION)
+    chantier_enabled = is_module_enabled(modules, OrganizationModuleCode.CHANTIER)
+    billing_enabled = is_module_enabled(modules, OrganizationModuleCode.FACTURATION)
+
+    kpis: list[dict[str, object]] = []
+    alerts: list[dict[str, object]] = []
+    module_cards: list[dict[str, object]] = []
+
+    if billing_enabled:
+        customers = list_billing_customers(db, organization_id)
+        quotes = list_quotes_for_organization(db, organization_id)
+        invoices = list_invoices_for_organization(db, organization_id)
+        active_quotes_count = sum(1 for quote in quotes if quote.status in {QuoteStatus.DRAFT, QuoteStatus.SENT})
+        quotes_to_follow_up_count = sum(1 for quote in quotes if quote.follow_up_status == "to_follow_up")
+
+        pending_invoices_count = 0
+        overdue_invoices_count = 0
+        outstanding_amount_cents = 0
+        invoice_currency = "EUR"
+        for invoice in invoices:
+            outstanding_amount = compute_outstanding_amount_cents(
+                invoice.total_amount_cents,
+                invoice.paid_amount_cents,
+            )
+            outstanding_amount_cents += outstanding_amount
+            if outstanding_amount > 0:
+                pending_invoices_count += 1
+            resolved_status = resolve_invoice_status(
+                invoice.status,
+                due_date=invoice.due_date,
+                total_amount_cents=invoice.total_amount_cents,
+                paid_amount_cents=invoice.paid_amount_cents,
+            )
+            if resolved_status == InvoiceStatus.OVERDUE:
+                overdue_invoices_count += 1
+            if invoice.currency:
+                invoice_currency = invoice.currency
+
+        kpis.extend(
+            [
+                {
+                    "id": "quotes-in-progress",
+                    "label": "Devis en cours",
+                    "value": str(active_quotes_count),
+                    "detail": (
+                        "Brouillons et devis envoyés à suivre."
+                        if active_quotes_count > 0
+                        else "Aucun devis en cours."
+                    ),
+                    "status_label": "À suivre" if active_quotes_count > 0 else "À jour",
+                    "tone": "progress" if active_quotes_count > 0 else "success",
+                },
+                {
+                    "id": "invoices-pending",
+                    "label": "Factures en attente",
+                    "value": str(pending_invoices_count),
+                    "detail": (
+                        f"{overdue_invoices_count} en retard."
+                        if overdue_invoices_count > 0
+                        else "Reste à encaisser ou à suivre."
+                        if pending_invoices_count > 0
+                        else "Aucune facture en attente."
+                    ),
+                    "status_label": (
+                        "En retard"
+                        if overdue_invoices_count > 0
+                        else "En attente"
+                        if pending_invoices_count > 0
+                        else "À jour"
+                    ),
+                    "tone": (
+                        "warning"
+                        if overdue_invoices_count > 0
+                        else "progress"
+                        if pending_invoices_count > 0
+                        else "success"
+                    ),
+                },
+            ]
+        )
+
+        if overdue_invoices_count > 0:
+            alerts.append(
+                {
+                    "id": "billing-overdue-invoices",
+                    "title": "Factures en retard",
+                    "description": (
+                        f"{overdue_invoices_count} facture{'s dépassent' if overdue_invoices_count > 1 else ' dépasse'} "
+                        f"l'échéance et demande{'nt' if overdue_invoices_count > 1 else ''} un suivi."
+                    ),
+                    "module_label": "Facturation",
+                    "tone": "warning",
+                    "priority": 1,
+                }
+            )
+
+        if quotes_to_follow_up_count > 0:
+            alerts.append(
+                {
+                    "id": "billing-quotes-follow-up",
+                    "title": "Devis à relancer",
+                    "description": (
+                        f"{quotes_to_follow_up_count} devis "
+                        f"{'sont marqués' if quotes_to_follow_up_count > 1 else 'est marqué'} à relancer."
+                    ),
+                    "module_label": "Facturation",
+                    "tone": "progress",
+                    "priority": 2,
+                }
+            )
+
+        module_cards.append(
+            {
+                "id": "enterprise-facturation",
+                "label": "Facturation",
+                "headline": (
+                    f"{pending_invoices_count} facture{'s' if pending_invoices_count > 1 else ''} à suivre"
+                    if pending_invoices_count > 0
+                    else f"{len(customers)} client{'s' if len(customers) > 1 else ''} actif{'s' if len(customers) > 1 else ''}"
+                ),
+                "detail": (
+                    "Devis, factures et suivis utiles sont regroupés dans une lecture rapide."
+                    if pending_invoices_count > 0 or active_quotes_count > 0 or quotes_to_follow_up_count > 0
+                    else "Le module reste calme avec une lecture courte des clients et documents suivis."
+                ),
+                "highlights": [
+                    {
+                        "id": "facturation-invoices",
+                        "label": "Factures",
+                        "value": (
+                            f"{pending_invoices_count} en attente"
+                            f"{f' · {overdue_invoices_count} en retard' if overdue_invoices_count > 0 else ''}"
+                            if pending_invoices_count > 0 or overdue_invoices_count > 0
+                            else "Aucune facture à suivre"
+                        ),
+                    },
+                    {
+                        "id": "facturation-quotes",
+                        "label": "Devis",
+                        "value": (
+                            f"{active_quotes_count} en cours"
+                            f"{f' · {quotes_to_follow_up_count} à relancer' if quotes_to_follow_up_count > 0 else ''}"
+                            if active_quotes_count > 0 or quotes_to_follow_up_count > 0
+                            else "Aucun devis en cours"
+                        ),
+                    },
+                    {
+                        "id": "facturation-cash",
+                        "label": "Encaissement",
+                        "value": (
+                            f"{format_cockpit_amount_cents(outstanding_amount_cents, invoice_currency)} en attente"
+                            if outstanding_amount_cents > 0
+                            else f"{len(customers)} client{'s' if len(customers) > 1 else ''} suivi{'s' if len(customers) > 1 else ''}"
+                        ),
+                    },
+                ],
+                "status_label": (
+                    "À traiter"
+                    if overdue_invoices_count > 0
+                    else "À suivre"
+                    if pending_invoices_count > 0 or quotes_to_follow_up_count > 0
+                    else "À jour"
+                ),
+                "tone": (
+                    "warning"
+                    if overdue_invoices_count > 0
+                    else "progress"
+                    if pending_invoices_count > 0 or quotes_to_follow_up_count > 0
+                    else "success"
+                ),
+            }
+        )
+
+    if regulation_enabled:
+        sites = list_active_sites(db, organization_id)
+        building_safety_items = list_building_safety_items(db, organization_id)
+        building_safety_alerts = build_building_safety_alerts(building_safety_items)
+        duerp_entries = list_duerp_entries(db, organization_id)
+        regulatory_documents = list_regulatory_evidence_documents(db, organization_id)
+        regulatory_profile = build_regulatory_profile_snapshot(
+            organization,
+            sites,
+            building_safety_items=building_safety_items,
+            duerp_entries=duerp_entries,
+            documents=regulatory_documents,
+        )
+        regulatory_obligations = regulatory_profile.get("applicable_obligations", [])
+        regulatory_obligations_to_verify_count = sum(
+            1 for obligation in regulatory_obligations if obligation.get("status") == "to_verify"
+        )
+        overdue_regulatory_obligation_count = sum(
+            1 for obligation in regulatory_obligations if obligation.get("status") == "overdue"
+        )
+        active_duerp_entries_count = sum(
+            1 for entry in duerp_entries if entry.deleted_at is None and entry.status == DuerpEntryStatus.ACTIVE
+        )
+        building_safety_overdue_count = sum(
+            1 for alert in building_safety_alerts if alert["alert_type"] == "overdue"
+        )
+        regulatory_action_count = (
+            regulatory_obligations_to_verify_count
+            + overdue_regulatory_obligation_count
+            + len(building_safety_alerts)
+        )
+
+        kpis.append(
+            {
+                "id": "regulation-to-review",
+                "label": "Réglementaire à vérifier",
+                "value": str(regulatory_action_count),
+                "detail": (
+                    "Obligations ou contrôles à revoir."
+                    if regulatory_action_count > 0
+                    else "Aucun point réglementaire prioritaire."
+                ),
+                "status_label": (
+                    "À traiter"
+                    if building_safety_overdue_count > 0 or overdue_regulatory_obligation_count > 0
+                    else "À vérifier"
+                    if regulatory_action_count > 0
+                    else "À jour"
+                ),
+                "tone": (
+                    "warning"
+                    if building_safety_overdue_count > 0 or overdue_regulatory_obligation_count > 0
+                    else "progress"
+                    if regulatory_action_count > 0
+                    else "success"
+                ),
+            }
+        )
+
+        if building_safety_overdue_count > 0:
+            alerts.append(
+                {
+                    "id": "regulation-building-safety-overdue",
+                    "title": "Sécurité bâtiment à traiter",
+                    "description": (
+                        f"{building_safety_overdue_count} élément{'s' if building_safety_overdue_count > 1 else ''} "
+                        f"sécurité {'sont en retard' if building_safety_overdue_count > 1 else 'est en retard'} de contrôle."
+                    ),
+                    "module_label": "Réglementation",
+                    "tone": "warning",
+                    "priority": 1,
+                }
+            )
+
+        if regulatory_obligations_to_verify_count > 0:
+            alerts.append(
+                {
+                    "id": "regulation-obligations-to-verify",
+                    "title": "Obligations à vérifier",
+                    "description": (
+                        f"{regulatory_obligations_to_verify_count} obligation"
+                        f"{'s demandent' if regulatory_obligations_to_verify_count > 1 else ' demande'} une vérification simple."
+                    ),
+                    "module_label": "Réglementation",
+                    "tone": "progress",
+                    "priority": 2,
+                }
+            )
+
+        module_cards.append(
+            {
+                "id": "enterprise-reglementation",
+                "label": "Réglementation",
+                "headline": (
+                    f"{regulatory_action_count} point{'s' if regulatory_action_count > 1 else ''} à revoir"
+                    if regulatory_action_count > 0
+                    else "Lecture apaisée"
+                ),
+                "detail": (
+                    "Obligations, sécurité bâtiment et risques suivis ressortent dans une même lecture simple."
+                    if regulatory_action_count > 0
+                    else "Le module reste lisible avec des repères courts sur les obligations et la prévention."
+                ),
+                "highlights": [
+                    {
+                        "id": "reglementation-obligations",
+                        "label": "Obligations",
+                        "value": (
+                            f"{regulatory_obligations_to_verify_count} à vérifier"
+                            f"{f' · {overdue_regulatory_obligation_count} en retard' if overdue_regulatory_obligation_count > 0 else ''}"
+                            if regulatory_obligations_to_verify_count > 0 or overdue_regulatory_obligation_count > 0
+                            else "Aucune obligation à reprendre"
+                        ),
+                    },
+                    {
+                        "id": "reglementation-building-safety",
+                        "label": "Sécurité bâtiment",
+                        "value": (
+                            f"{len(building_safety_alerts)} alerte{'s' if len(building_safety_alerts) > 1 else ''}"
+                            f"{f' · {building_safety_overdue_count} contrôle{'s' if building_safety_overdue_count > 1 else ''} en retard' if building_safety_overdue_count > 0 else ''}"
+                            if len(building_safety_alerts) > 0 or building_safety_overdue_count > 0
+                            else "Aucun contrôle simple à revoir"
+                        ),
+                    },
+                    {
+                        "id": "reglementation-duerp",
+                        "label": "DUERP",
+                        "value": (
+                            f"{active_duerp_entries_count} risque{'s' if active_duerp_entries_count > 1 else ''} "
+                            f"suivi{'s' if active_duerp_entries_count > 1 else ''}"
+                            if active_duerp_entries_count > 0
+                            else "Aucun risque suivi pour le moment"
+                        ),
+                    },
+                ],
+                "status_label": (
+                    "À traiter"
+                    if building_safety_overdue_count > 0 or overdue_regulatory_obligation_count > 0
+                    else "À vérifier"
+                    if regulatory_action_count > 0
+                    else "À jour"
+                ),
+                "tone": (
+                    "warning"
+                    if building_safety_overdue_count > 0 or overdue_regulatory_obligation_count > 0
+                    else "progress"
+                    if regulatory_action_count > 0
+                    else "success"
+                ),
+            }
+        )
+
+    if chantier_enabled:
+        worksites = list_worksite_summaries(organization_id)
+        worksite_documents = list_worksite_documents(db, organization_id)
+        blocked_worksites_count = sum(1 for worksite in worksites if worksite["status"] == "blocked")
+        planned_worksites_count = sum(1 for worksite in worksites if worksite["status"] == "planned")
+        worksites_needing_action_count = blocked_worksites_count + planned_worksites_count
+        finalized_worksite_documents_count = sum(
+            1 for document in worksite_documents if document.lifecycle_status == "finalized"
+        )
+        linked_worksite_signatures_count = sum(
+            1 for document in worksite_documents if document.linked_signature_document_id is not None
+        )
+        linked_worksite_proofs_count = sum(
+            len(document.linked_proof_document_ids or [])
+            for document in worksite_documents
+        )
+
+        kpis.append(
+            {
+                "id": "worksites-needing-action",
+                "label": "Chantiers nécessitant une action",
+                "value": str(worksites_needing_action_count),
+                "detail": (
+                    "Bloqués ou à préparer."
+                    if worksites_needing_action_count > 0
+                    else "Aucun chantier prioritaire."
+                ),
+                "status_label": (
+                    "Bloqués"
+                    if blocked_worksites_count > 0
+                    else "À préparer"
+                    if worksites_needing_action_count > 0
+                    else "À jour"
+                ),
+                "tone": (
+                    "warning"
+                    if blocked_worksites_count > 0
+                    else "progress"
+                    if worksites_needing_action_count > 0
+                    else "success"
+                ),
+            }
+        )
+
+        if blocked_worksites_count > 0:
+            alerts.append(
+                {
+                    "id": "worksites-blocked",
+                    "title": "Chantiers bloqués",
+                    "description": (
+                        f"{blocked_worksites_count} chantier"
+                        f"{'s sont' if blocked_worksites_count > 1 else ' est'} bloqué"
+                        f"{'s' if blocked_worksites_count > 1 else ''} et nécessite"
+                        f"{'nt' if blocked_worksites_count > 1 else ''} une action."
+                    ),
+                    "module_label": "Chantier",
+                    "tone": "warning",
+                    "priority": 1,
+                }
+            )
+        elif planned_worksites_count > 0:
+            alerts.append(
+                {
+                    "id": "worksites-planned",
+                    "title": "Chantiers à préparer",
+                    "description": (
+                        f"{planned_worksites_count} chantier"
+                        f"{'s sont' if planned_worksites_count > 1 else ' est'} planifié"
+                        f"{'s' if planned_worksites_count > 1 else ''} et mérite"
+                        f"{'nt' if planned_worksites_count > 1 else ''} une préparation simple."
+                    ),
+                    "module_label": "Chantier",
+                    "tone": "calm",
+                    "priority": 3,
+                }
+            )
+
+        module_cards.append(
+            {
+                "id": "enterprise-chantier",
+                "label": "Chantier",
+                "headline": (
+                    f"{len(worksites)} chantier{'s' if len(worksites) > 1 else ''} suivi{'s' if len(worksites) > 1 else ''}"
+                    if len(worksites) > 0
+                    else "Aucun chantier"
+                ),
+                "detail": (
+                    "Statut terrain, documents chantier et repères liés restent regroupés ici."
+                    if len(worksites) > 0
+                    else "Le module chantier pourra remonter ici ses signaux utiles."
+                ),
+                "highlights": [
+                    {
+                        "id": "chantier-worksites",
+                        "label": "Actions terrain",
+                        "value": (
+                            f"{blocked_worksites_count} bloqué{'s' if blocked_worksites_count > 1 else ''}"
+                            f" · {planned_worksites_count} à préparer"
+                            if worksites_needing_action_count > 0
+                            else "Aucun signal terrain prioritaire"
+                        ),
+                    },
+                    {
+                        "id": "chantier-documents",
+                        "label": "Documents chantier",
+                        "value": (
+                            f"{len(worksite_documents)} généré{'s' if len(worksite_documents) > 1 else ''}"
+                            f" · {finalized_worksite_documents_count} finalisé{'s' if finalized_worksite_documents_count > 1 else ''}"
+                            if len(worksite_documents) > 0
+                            else "Aucun document chantier généré"
+                        ),
+                    },
+                    {
+                        "id": "chantier-links",
+                        "label": "Éléments liés",
+                        "value": (
+                            f"{linked_worksite_signatures_count} signature{'s' if linked_worksite_signatures_count > 1 else ''}"
+                            f" · {linked_worksite_proofs_count} preuve{'s' if linked_worksite_proofs_count > 1 else ''}"
+                            if linked_worksite_signatures_count > 0 or linked_worksite_proofs_count > 0
+                            else "Aucune signature ou preuve liée"
+                        ),
+                    },
+                ],
+                "status_label": (
+                    "À traiter"
+                    if blocked_worksites_count > 0
+                    else "À préparer"
+                    if planned_worksites_count > 0
+                    else "À jour"
+                ),
+                "tone": (
+                    "warning"
+                    if blocked_worksites_count > 0
+                    else "progress"
+                    if len(worksites) > 0 and planned_worksites_count > 0
+                    else "success"
+                ),
+            }
+        )
+
+    return CockpitSummaryRead.model_validate(
+        {
+            "kpis": kpis,
+            "alerts": sorted(
+                alerts,
+                key=lambda item: (int(item["priority"]), str(item["title"])),
+            )[:6],
+            "module_cards": module_cards,
+        }
+    )
+
+
 @router.get(
     "/{organization_id}/profile",
     response_model=OrganizationRead,
@@ -287,6 +1095,18 @@ def read_profile(
     context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
 ) -> OrganizationRead:
     return OrganizationRead.model_validate(context.organization)
+
+
+@router.get(
+    "/{organization_id}/cockpit-summary",
+    response_model=CockpitSummaryRead,
+)
+def read_cockpit_summary(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
+    db: Session = Depends(get_db_session),
+) -> CockpitSummaryRead:
+    return build_cockpit_summary(db, context.organization.id, context.organization)
 
 
 @router.patch(
@@ -558,11 +1378,35 @@ def read_building_safety_alerts(
     context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
     db: Session = Depends(get_db_session),
 ) -> list[BuildingSafetyAlertRead]:
-    if site_id is not None:
-        get_site_or_404(db, context.organization.id, site_id)
-    items = list_building_safety_items(db, context.organization.id, site_id)
-    alerts = build_building_safety_alerts(items)
-    return [BuildingSafetyAlertRead.model_validate(alert) for alert in alerts]
+    started_at = perf_counter()
+    logger.info(
+        "building-safety-alerts start organization_id=%s site_id=%s user_id=%s",
+        context.organization.id,
+        site_id,
+        context.user.id,
+    )
+    try:
+        if site_id is not None:
+            get_site_or_404(db, context.organization.id, site_id)
+        items = list_building_safety_items(db, context.organization.id, site_id)
+        alerts = build_building_safety_alerts(items)
+        logger.info(
+            "building-safety-alerts done organization_id=%s site_id=%s items=%s alerts=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            len(items),
+            len(alerts),
+            round((perf_counter() - started_at) * 1000),
+        )
+        return [BuildingSafetyAlertRead.model_validate(alert) for alert in alerts]
+    except Exception:
+        logger.exception(
+            "building-safety-alerts failed organization_id=%s site_id=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            round((perf_counter() - started_at) * 1000),
+        )
+        raise
 
 
 @router.post(
@@ -680,17 +1524,41 @@ def read_duerp_entries(
     context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
     db: Session = Depends(get_db_session),
 ) -> list[DuerpEntryRead]:
-    if site_id is not None:
-        get_site_or_404(db, context.organization.id, site_id)
-    entries = list_duerp_entries(db, context.organization.id, site_id)
-    documents = list_regulatory_evidence_documents(db, context.organization.id)
-    indexes = build_regulatory_evidence_indexes(documents)
-    return [
-        DuerpEntryRead.model_validate(
-            serialize_duerp_entry(entry, indexes["duerp_entry_counts"].get(str(entry.id), 0))
+    started_at = perf_counter()
+    logger.info(
+        "duerp-entries start organization_id=%s site_id=%s user_id=%s",
+        context.organization.id,
+        site_id,
+        context.user.id,
+    )
+    try:
+        if site_id is not None:
+            get_site_or_404(db, context.organization.id, site_id)
+        entries = list_duerp_entries(db, context.organization.id, site_id)
+        documents = list_regulatory_evidence_documents(db, context.organization.id)
+        indexes = build_regulatory_evidence_indexes(documents)
+        logger.info(
+            "duerp-entries done organization_id=%s site_id=%s entries=%s evidences=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            len(entries),
+            len(documents),
+            round((perf_counter() - started_at) * 1000),
         )
-        for entry in entries
-    ]
+        return [
+            DuerpEntryRead.model_validate(
+                serialize_duerp_entry(entry, indexes["duerp_entry_counts"].get(str(entry.id), 0))
+            )
+            for entry in entries
+        ]
+    except Exception:
+        logger.exception(
+            "duerp-entries failed organization_id=%s site_id=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            round((perf_counter() - started_at) * 1000),
+        )
+        raise
 
 
 @router.post(
@@ -815,34 +1683,60 @@ def read_regulatory_evidences(
     context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
     db: Session = Depends(get_db_session),
 ) -> list[RegulatoryEvidenceRead]:
-    if site_id is not None:
-        get_site_or_404(db, context.organization.id, site_id)
-
-    sites = list_active_sites(db, context.organization.id)
-    building_safety_items = list_building_safety_items(db, context.organization.id)
-    duerp_entries = list_duerp_entries(db, context.organization.id)
-    regulatory_profile = build_regulatory_profile_snapshot(
-        context.organization,
-        sites,
-        building_safety_items=building_safety_items,
-        duerp_entries=duerp_entries,
-        documents=list_regulatory_evidence_documents(db, context.organization.id),
+    started_at = perf_counter()
+    logger.info(
+        "regulatory-evidences start organization_id=%s site_id=%s user_id=%s",
+        context.organization.id,
+        site_id,
+        context.user.id,
     )
-    site_lookup, building_safety_lookup, duerp_lookup, obligation_titles = build_evidence_support_maps(
-        sites,
-        building_safety_items,
-        duerp_entries,
-        regulatory_profile,
-    )
+    try:
+        if site_id is not None:
+            get_site_or_404(db, context.organization.id, site_id)
 
-    documents = list_regulatory_evidence_documents(db, context.organization.id)
-    payload = [
-        serialize_regulatory_evidence(document, obligation_titles, site_lookup, building_safety_lookup, duerp_lookup)
-        for document in documents
-    ]
-    if site_id is not None:
-        payload = [item for item in payload if str(item["site_id"]) == str(site_id)]
-    return [RegulatoryEvidenceRead.model_validate(item) for item in payload]
+        sites = list_active_sites(db, context.organization.id)
+        building_safety_items = list_building_safety_items(db, context.organization.id)
+        duerp_entries = list_duerp_entries(db, context.organization.id)
+        documents = list_regulatory_evidence_documents(db, context.organization.id)
+        regulatory_profile = build_regulatory_profile_snapshot(
+            context.organization,
+            sites,
+            building_safety_items=building_safety_items,
+            duerp_entries=duerp_entries,
+            documents=documents,
+        )
+        site_lookup, building_safety_lookup, duerp_lookup, obligation_titles = build_evidence_support_maps(
+            sites,
+            building_safety_items,
+            duerp_entries,
+            regulatory_profile,
+        )
+
+        payload = [
+            serialize_regulatory_evidence(document, obligation_titles, site_lookup, building_safety_lookup, duerp_lookup)
+            for document in documents
+        ]
+        if site_id is not None:
+            payload = [item for item in payload if str(item["site_id"]) == str(site_id)]
+        logger.info(
+            "regulatory-evidences done organization_id=%s site_id=%s sites=%s building_items=%s duerp_entries=%s evidences=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            len(sites),
+            len(building_safety_items),
+            len(duerp_entries),
+            len(payload),
+            round((perf_counter() - started_at) * 1000),
+        )
+        return [RegulatoryEvidenceRead.model_validate(item) for item in payload]
+    except Exception:
+        logger.exception(
+            "regulatory-evidences failed organization_id=%s site_id=%s duration_ms=%s",
+            context.organization.id,
+            site_id,
+            round((perf_counter() - started_at) * 1000),
+        )
+        raise
 
 
 @router.post(
@@ -1900,9 +2794,573 @@ def read_audit_logs(
 def list_worksites(
     organization_id: UUID,
     context: OrganizationAccessContext = Depends(require_permissions("organization:read")),
+    db: Session = Depends(get_db_session),
 ) -> list[WorksiteSummaryRead]:
+    coordination_index = build_worksite_coordination_index(
+        list_worksite_coordination_items(db, context.organization.id)
+    )
     worksites = list_worksite_summaries(context.organization.id)
-    return [WorksiteSummaryRead.model_validate(worksite) for worksite in worksites]
+    return [
+        serialize_worksite_summary_read(
+            db,
+            context.organization.id,
+            worksite,
+            coordination_index=coordination_index,
+        )
+        for worksite in worksites
+    ]
+
+
+@router.get(
+    "/{organization_id}/worksite-assignees",
+    response_model=list[WorksiteAssigneeRead],
+)
+def list_worksite_assignees(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "users:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteAssigneeRead]:
+    return [
+        WorksiteAssigneeRead(
+            user_id=membership.user_id,
+            display_name=membership.user.display_name,
+            role_code=membership.role_code,
+        )
+        for membership in list_active_worksite_assignees(db, context.organization.id)
+    ]
+
+
+@router.get(
+    "/{organization_id}/worksite-documents",
+    response_model=list[WorksiteDocumentRead],
+)
+def list_linked_worksite_documents(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(require_chantier_read),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteDocumentRead]:
+    coordination_index = build_worksite_coordination_index(
+        list_worksite_coordination_items(db, context.organization.id)
+    )
+    documents = list_worksite_documents(db, context.organization.id)
+    return [
+        serialize_worksite_document_read(
+            db,
+            context.organization.id,
+            document,
+            coordination_index=coordination_index,
+        )
+        for document in documents
+    ]
+
+
+@router.get(
+    "/{organization_id}/worksite-signatures",
+    response_model=list[WorksiteSignatureRead],
+)
+def list_linked_worksite_signatures(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteSignatureRead]:
+    signatures = list_worksite_signatures(db, context.organization.id)
+    return [
+        WorksiteSignatureRead.model_validate(
+            serialize_worksite_signature(
+                signature,
+                worksite_name=get_worksite_name_or_404(context.organization.id, signature.attached_to_entity_id)
+                or "Chantier",
+            )
+        )
+        for signature in signatures
+    ]
+
+
+@router.get(
+    "/{organization_id}/worksite-proofs",
+    response_model=list[WorksiteProofRead],
+)
+def list_linked_worksite_proofs(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteProofRead]:
+    proofs = list_worksite_proofs(db, context.organization.id)
+    return [
+        WorksiteProofRead.model_validate(
+            serialize_worksite_proof(
+                proof,
+                worksite_name=get_worksite_name_or_404(context.organization.id, proof.attached_to_entity_id)
+                or "Chantier",
+            )
+        )
+        for proof in proofs
+    ]
+
+
+@router.patch(
+    "/{organization_id}/worksite-documents/{document_id}/status",
+    response_model=WorksiteDocumentRead,
+)
+def update_worksite_document_status(
+    organization_id: UUID,
+    document_id: UUID,
+    payload: WorksiteDocumentStatusUpdateRequest,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:update")
+    ),
+    db: Session = Depends(get_db_session),
+) -> WorksiteDocumentRead:
+    document = get_worksite_document_or_404(db, context.organization.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document chantier introuvable pour cette organisation.")
+
+    if payload.lifecycle_status not in WORKSITE_DOCUMENT_LIFECYCLE_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut de document chantier invalide.")
+
+    previous_lifecycle_status = document.lifecycle_status or "draft"
+    if previous_lifecycle_status == payload.lifecycle_status:
+        return serialize_worksite_document_read(db, context.organization.id, document)
+
+    document.lifecycle_status = payload.lifecycle_status
+    document.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_document",
+        target_id=document.id,
+        target_display=document.file_name,
+        changes={
+            "lifecycle_status": {
+                "from": previous_lifecycle_status,
+                "to": payload.lifecycle_status,
+            },
+            "worksite_id": str(document.attached_to_entity_id),
+        },
+    )
+    db.commit()
+    db.refresh(document)
+    return serialize_worksite_document_read(db, context.organization.id, document)
+
+
+@router.patch(
+    "/{organization_id}/worksite-documents/{document_id}/signature",
+    response_model=WorksiteDocumentRead,
+)
+def update_worksite_document_signature(
+    organization_id: UUID,
+    document_id: UUID,
+    payload: WorksiteDocumentSignatureUpdateRequest,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:update")
+    ),
+    db: Session = Depends(get_db_session),
+) -> WorksiteDocumentRead:
+    document = get_worksite_document_or_404(db, context.organization.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document chantier introuvable pour cette organisation.")
+
+    previous_signature_document_id = document.linked_signature_document_id
+    next_signature_document_id = payload.signature_document_id
+    if previous_signature_document_id == next_signature_document_id:
+        return serialize_worksite_document_read(db, context.organization.id, document)
+
+    linked_signature = None
+    if next_signature_document_id is not None:
+        linked_signature = get_worksite_signature_document(
+            db,
+            context.organization.id,
+            next_signature_document_id,
+        )
+        if linked_signature is None:
+            raise HTTPException(status_code=404, detail="Signature chantier introuvable pour cette organisation.")
+        if linked_signature.attached_to_entity_id != document.attached_to_entity_id:
+            raise HTTPException(
+                status_code=400,
+                detail="La signature choisie doit appartenir au meme chantier que le document.",
+            )
+
+    document.linked_signature_document_id = next_signature_document_id
+    document.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_document",
+        target_id=document.id,
+        target_display=document.file_name,
+        changes={
+            "linked_signature_document_id": {
+                "from": str(previous_signature_document_id) if previous_signature_document_id is not None else None,
+                "to": str(next_signature_document_id) if next_signature_document_id is not None else None,
+            },
+            "worksite_id": str(document.attached_to_entity_id),
+        },
+    )
+    db.commit()
+    db.refresh(document)
+    return serialize_worksite_document_read(db, context.organization.id, document)
+
+
+@router.patch(
+    "/{organization_id}/worksite-documents/{document_id}/proofs",
+    response_model=WorksiteDocumentRead,
+)
+def update_worksite_document_proofs(
+    organization_id: UUID,
+    document_id: UUID,
+    payload: WorksiteDocumentProofUpdateRequest,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:update")
+    ),
+    db: Session = Depends(get_db_session),
+) -> WorksiteDocumentRead:
+    document = get_worksite_document_or_404(db, context.organization.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document chantier introuvable pour cette organisation.")
+
+    normalized_next_proof_ids: list[str] = []
+    for proof_document_id in payload.proof_document_ids:
+        proof = get_worksite_proof_document(db, context.organization.id, proof_document_id)
+        if proof is None:
+            raise HTTPException(status_code=404, detail="Preuve chantier introuvable pour cette organisation.")
+        if proof.attached_to_entity_id != document.attached_to_entity_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Les preuves choisies doivent appartenir au meme chantier que le document.",
+            )
+        normalized_proof_id = str(proof_document_id)
+        if normalized_proof_id not in normalized_next_proof_ids:
+            normalized_next_proof_ids.append(normalized_proof_id)
+
+    previous_proof_ids = [str(value) for value in (document.linked_proof_document_ids or [])]
+    if previous_proof_ids == normalized_next_proof_ids:
+        return serialize_worksite_document_read(db, context.organization.id, document)
+
+    document.linked_proof_document_ids = normalized_next_proof_ids
+    document.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_document",
+        target_id=document.id,
+        target_display=document.file_name,
+        changes={
+            "linked_proof_document_ids": {
+                "from": previous_proof_ids,
+                "to": normalized_next_proof_ids,
+            },
+            "worksite_id": str(document.attached_to_entity_id),
+        },
+    )
+    db.commit()
+    db.refresh(document)
+    return serialize_worksite_document_read(db, context.organization.id, document)
+
+
+@router.patch(
+    "/{organization_id}/worksites/{worksite_id}/coordination",
+    response_model=WorksiteSummaryRead,
+)
+def update_worksite_coordination(
+    organization_id: UUID,
+    worksite_id: UUID,
+    payload: WorksiteCoordinationUpdateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteSummaryRead:
+    worksite = get_worksite_summary(context.organization.id, worksite_id)
+    if worksite is None:
+        raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
+
+    if payload.status not in WORKSITE_COORDINATION_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut de suivi chantier invalide.")
+
+    assignee_membership = resolve_worksite_assignee_or_404(
+        db,
+        context.organization.id,
+        payload.assignee_user_id,
+    )
+    item = ensure_worksite_coordination_item(
+        db,
+        context.organization.id,
+        target_type=WORKSITE_COORDINATION_TARGET_WORKSITE,
+        target_id=worksite_id,
+    )
+    next_comment_text = normalize_optional_text(payload.comment_text)
+    previous_state = serialize_worksite_coordination(
+        item,
+        target_type=WORKSITE_COORDINATION_TARGET_WORKSITE,
+        target_id=worksite_id,
+    )
+
+    item.status = payload.status
+    item.assignee_user_id = assignee_membership.user_id if assignee_membership is not None else None
+    item.comment_text = next_comment_text
+    item.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_coordination",
+        target_id=worksite_id,
+        target_display=str(worksite["name"]),
+        changes={
+            "status": {"from": previous_state["status"], "to": payload.status},
+            "assignee_user_id": {
+                "from": previous_state["assignee_user_id"],
+                "to": str(assignee_membership.user_id) if assignee_membership is not None else None,
+            },
+            "comment_text": {
+                "from": previous_state["comment_text"],
+                "to": next_comment_text,
+            },
+        },
+    )
+    db.commit()
+    db.refresh(item)
+    refreshed_worksite = get_worksite_summary(context.organization.id, worksite_id)
+    if refreshed_worksite is None:
+        raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
+    return serialize_worksite_summary_read(db, context.organization.id, refreshed_worksite)
+
+
+@router.patch(
+    "/{organization_id}/worksite-documents/{document_id}/coordination",
+    response_model=WorksiteDocumentRead,
+)
+def update_worksite_document_coordination(
+    organization_id: UUID,
+    document_id: UUID,
+    payload: WorksiteCoordinationUpdateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteDocumentRead:
+    document = get_worksite_document_or_404(db, context.organization.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document chantier introuvable pour cette organisation.")
+
+    if payload.status not in WORKSITE_COORDINATION_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut de suivi de document invalide.")
+
+    assignee_membership = resolve_worksite_assignee_or_404(
+        db,
+        context.organization.id,
+        payload.assignee_user_id,
+    )
+    item = ensure_worksite_coordination_item(
+        db,
+        context.organization.id,
+        target_type=WORKSITE_COORDINATION_TARGET_DOCUMENT,
+        target_id=document.id,
+    )
+    next_comment_text = normalize_optional_text(payload.comment_text)
+    previous_state = serialize_worksite_coordination(
+        item,
+        target_type=WORKSITE_COORDINATION_TARGET_DOCUMENT,
+        target_id=document.id,
+    )
+
+    item.status = payload.status
+    item.assignee_user_id = assignee_membership.user_id if assignee_membership is not None else None
+    item.comment_text = next_comment_text
+    item.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_document_coordination",
+        target_id=document.id,
+        target_display=document.file_name,
+        changes={
+            "status": {"from": previous_state["status"], "to": payload.status},
+            "assignee_user_id": {
+                "from": previous_state["assignee_user_id"],
+                "to": str(assignee_membership.user_id) if assignee_membership is not None else None,
+            },
+            "comment_text": {
+                "from": previous_state["comment_text"],
+                "to": next_comment_text,
+            },
+            "worksite_id": str(document.attached_to_entity_id),
+        },
+    )
+    db.commit()
+    db.refresh(document)
+    return serialize_worksite_document_read(db, context.organization.id, document)
+
+
+@router.get(
+    "/{organization_id}/worksites/{worksite_id}/summary.pdf",
+)
+def download_worksite_summary_pdf(
+    organization_id: UUID,
+    worksite_id: UUID,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> Response:
+    _, pdf_bytes, filename, notes = build_worksite_summary_document_bundle(
+        db,
+        context.organization.id,
+        context.organization,
+        worksite_id,
+    )
+    register_generated_worksite_document(
+        db,
+        organization_id=context.organization.id,
+        worksite_id=worksite_id,
+        document_type=WORKSITE_SUMMARY_DOCUMENT_TYPE,
+        file_name=filename,
+        pdf_bytes=pdf_bytes,
+        uploaded_by_user_id=context.user.id,
+        notes=notes,
+    )
+    db.commit()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf",
+)
+def download_worksite_prevention_plan_pdf(
+    organization_id: UUID,
+    worksite_id: UUID,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> Response:
+    _, pdf_bytes, filename, notes = build_worksite_prevention_plan_document_bundle(
+        db,
+        context.organization.id,
+        context.organization,
+        worksite_id,
+    )
+    register_generated_worksite_document(
+        db,
+        organization_id=context.organization.id,
+        worksite_id=worksite_id,
+        document_type=WORKSITE_PREVENTION_PLAN_DOCUMENT_TYPE,
+        file_name=filename,
+        pdf_bytes=pdf_bytes,
+        uploaded_by_user_id=context.user.id,
+        notes=notes,
+    )
+    db.commit()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/{organization_id}/worksites/{worksite_id}/prevention-plan.pdf",
+)
+def export_adjusted_worksite_prevention_plan_pdf(
+    organization_id: UUID,
+    worksite_id: UUID,
+    payload: WorksitePreventionPlanExportRequest,
+    context: OrganizationAccessContext = Depends(
+        require_module_enabled(OrganizationModuleCode.CHANTIER, "organization:read")
+    ),
+    db: Session = Depends(get_db_session),
+) -> Response:
+    _, pdf_bytes, filename, notes = build_worksite_prevention_plan_document_bundle(
+        db,
+        context.organization.id,
+        context.organization,
+        worksite_id,
+        payload=payload,
+    )
+    register_generated_worksite_document(
+        db,
+        organization_id=context.organization.id,
+        worksite_id=worksite_id,
+        document_type=WORKSITE_PREVENTION_PLAN_DOCUMENT_TYPE,
+        file_name=filename,
+        pdf_bytes=pdf_bytes,
+        uploaded_by_user_id=context.user.id,
+        notes=notes,
+    )
+    db.commit()
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/{organization_id}/worksite-documents/{document_id}/download",
+)
+def download_generated_worksite_document(
+    organization_id: UUID,
+    document_id: UUID,
+    context: OrganizationAccessContext = Depends(require_chantier_read),
+    db: Session = Depends(get_db_session),
+) -> Response:
+    document = get_worksite_document_or_404(db, context.organization.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document chantier introuvable pour cette organisation.")
+
+    pdf_bytes = document.content_bytes
+    if pdf_bytes is None:
+        if document.document_type == WORKSITE_SUMMARY_DOCUMENT_TYPE:
+            _, pdf_bytes, _, _ = build_worksite_summary_document_bundle(
+                db,
+                context.organization.id,
+                context.organization,
+                document.attached_to_entity_id,
+            )
+        elif document.document_type == WORKSITE_PREVENTION_PLAN_DOCUMENT_TYPE:
+            _, pdf_bytes, _, _ = build_worksite_prevention_plan_document_bundle(
+                db,
+                context.organization.id,
+                context.organization,
+                document.attached_to_entity_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Ce document chantier ne dispose pas encore d'un fichier récupérable.",
+            )
+
+        document.version += 1
+        document.storage_key = build_worksite_document_storage_key(
+            document.attached_to_entity_id,
+            document.document_type,
+        )
+        store_generated_worksite_document_content(document, pdf_bytes)
+        db.commit()
+        db.refresh(document)
+
+    filename = document.file_name.strip() if document.file_name else "document-chantier.pdf"
+    media_type = document.mime_type or "application/pdf"
+    return Response(
+        content=document.content_bytes or pdf_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put(

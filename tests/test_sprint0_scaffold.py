@@ -23,6 +23,7 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "apps" / "api" / "app" / "db" / "models" / "invoice.py",
             ROOT / "apps" / "api" / "app" / "db" / "models" / "organization_site.py",
             ROOT / "apps" / "api" / "app" / "db" / "models" / "quote.py",
+            ROOT / "apps" / "api" / "app" / "db" / "models" / "worksite_coordination.py",
             ROOT / "apps" / "api" / "app" / "bootstrap_admin.py",
             ROOT / "apps" / "api" / "migrations" / "0001_sprint0_core.sql",
             ROOT / "apps" / "api" / "migrations" / "0002_sprint0_multi_org.sql",
@@ -37,6 +38,11 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "apps" / "api" / "migrations" / "0011_sprint3_billing_status_payment_numbering.sql",
             ROOT / "apps" / "api" / "migrations" / "0012_sprint3_billing_pdf_worksite_link.sql",
             ROOT / "apps" / "api" / "migrations" / "0013_sprint3_billing_follow_up_status.sql",
+            ROOT / "apps" / "api" / "migrations" / "0014_sprint5_worksite_document_lifecycle_status.sql",
+            ROOT / "apps" / "api" / "migrations" / "0015_sprint5_worksite_document_signature_link.sql",
+            ROOT / "apps" / "api" / "migrations" / "0016_sprint5_worksite_document_proof_links.sql",
+            ROOT / "apps" / "api" / "migrations" / "0017_sprint7_worksite_coordination.sql",
+            ROOT / "apps" / "api" / "migrations" / "0018_sprint8_worksite_document_content.sql",
             ROOT / "apps" / "api" / "app" / "api" / "routes" / "auth.py",
             ROOT / "apps" / "api" / "app" / "api" / "routes" / "organizations.py",
             ROOT / "apps" / "api" / "app" / "db" / "models" / "document.py",
@@ -48,10 +54,13 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "apps" / "api" / "app" / "core" / "regulation.py",
             ROOT / "apps" / "api" / "app" / "core" / "regulatory_export_pdf.py",
             ROOT / "apps" / "api" / "app" / "core" / "regulatory_evidence.py",
+            ROOT / "apps" / "api" / "app" / "core" / "worksite_coordination.py",
+            ROOT / "apps" / "api" / "app" / "core" / "worksite_documents.py",
             ROOT / "apps" / "api" / "app" / "core" / "worksites.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "audit_log.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "billing_customer.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "building_safety.py",
+            ROOT / "apps" / "api" / "app" / "schemas" / "cockpit.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "document.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "duerp.py",
             ROOT / "apps" / "api" / "app" / "schemas" / "invoice.py",
@@ -64,6 +73,13 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "apps" / "web" / "angular.json",
             ROOT / "apps" / "web" / ".env.example",
             ROOT / "apps" / "web" / "src" / "main.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "app.routes.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-home-page.component.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-shell.component.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-shell-context.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-worksite-documents-page-context.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-worksite-documents-page.component.ts",
+            ROOT / "apps" / "web" / "src" / "app" / "desktop-workspace-page.component.ts",
             ROOT / "apps" / "web" / "src" / "app" / "organization-client.ts",
             ROOT / "apps" / "web" / "src" / "environments" / "generated-env.ts",
             ROOT / "apps" / "mobile" / "angular.json",
@@ -83,6 +99,7 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "packages" / "contracts" / "src" / "billing-follow-up.ts",
             ROOT / "packages" / "contracts" / "src" / "billing-line.ts",
             ROOT / "packages" / "contracts" / "src" / "building-safety.ts",
+            ROOT / "packages" / "contracts" / "src" / "cockpit.ts",
             ROOT / "packages" / "contracts" / "src" / "compliance.ts",
             ROOT / "packages" / "contracts" / "src" / "document.ts",
             ROOT / "packages" / "contracts" / "src" / "duerp.ts",
@@ -133,6 +150,18 @@ class Sprint0ScaffoldTest(unittest.TestCase):
             ROOT / "docs" / "architecture" / "regulation-pdf-export-sprint2.md",
             ROOT / "docs" / "architecture" / "regulation-questionnaire-sprint2.md",
             ROOT / "docs" / "architecture" / "billing-foundation-sprint3.md",
+            ROOT / "docs" / "architecture" / "beta-closed-checklist-sprint7.md",
+            ROOT / "docs" / "architecture" / "beta-feedback-sprint7.md",
+            ROOT / "docs" / "architecture" / "offers-packaging-sprint7.md",
+            ROOT / "docs" / "architecture" / "pilot-launch-checklist-sprint7.md",
+            ROOT / "docs" / "architecture" / "product-presentation-sprint7.md",
+            ROOT / "docs" / "architecture" / "dashboard-sprint4.md",
+            ROOT / "docs" / "architecture" / "desktop-polish-sprint8.md",
+            ROOT / "docs" / "architecture" / "cockpit-api-summary-sprint8.md",
+            ROOT / "docs" / "architecture" / "front-backend-cleanup-sprint8.md",
+            ROOT / "docs" / "architecture" / "worksite-document-download-sprint8.md",
+            ROOT / "docs" / "architecture" / "documents-metier-sprint5.md",
+            ROOT / "docs" / "architecture" / "lightweight-coordination-sprint7.md",
             ROOT / "docs" / "architecture" / "billing-status-payment-numbering-sprint3.md",
             ROOT / "docs" / "architecture" / "billing-pdf-worksite-link-sprint3.md",
             ROOT / "docs" / "architecture" / "billing-status-payment-numbering-sprint3.md",
@@ -225,6 +254,28 @@ class Sprint0ScaffoldTest(unittest.TestCase):
         self.assertIn("add column if not exists receives_public", migration)
         self.assertIn("add column if not exists stores_hazardous_products", migration)
         self.assertIn("add column if not exists performs_high_risk_work", migration)
+
+    def test_worksite_document_signature_link_migration_contains_expected_changes(self) -> None:
+        migration = (ROOT / "apps" / "api" / "migrations" / "0015_sprint5_worksite_document_signature_link.sql").read_text()
+        self.assertIn("add column if not exists linked_signature_document_id", migration)
+        self.assertIn("references documents(id)", migration)
+
+    def test_worksite_document_proof_link_migration_contains_expected_changes(self) -> None:
+        migration = (ROOT / "apps" / "api" / "migrations" / "0016_sprint5_worksite_document_proof_links.sql").read_text()
+        self.assertIn("add column if not exists linked_proof_document_ids", migration)
+        self.assertIn("jsonb", migration)
+
+    def test_worksite_coordination_migration_contains_expected_changes(self) -> None:
+        migration = (ROOT / "apps" / "api" / "migrations" / "0017_sprint7_worksite_coordination.sql").read_text()
+        self.assertIn("create table if not exists worksite_coordination_items", migration)
+        self.assertIn("target_type", migration)
+        self.assertIn("status", migration)
+        self.assertIn("comment_text", migration)
+
+    def test_worksite_document_content_migration_contains_expected_changes(self) -> None:
+        migration = (ROOT / "apps" / "api" / "migrations" / "0018_sprint8_worksite_document_content.sql").read_text()
+        self.assertIn("add column if not exists content_bytes", migration)
+        self.assertIn("bytea", migration)
 
     def test_billing_foundation_migration_contains_expected_changes(self) -> None:
         migration = (ROOT / "apps" / "api" / "migrations" / "0010_sprint3_billing_foundation.sql").read_text()
@@ -535,7 +586,7 @@ class Sprint0ScaffoldTest(unittest.TestCase):
 
         self.assertIn("lots terrain dedoublonnes", sync_doc)
         self.assertIn("upload_media", sync_doc)
-        self.assertIn("Synchronisation terrain préparée", mobile_app)
+        self.assertIn("Préparation chantier déjà prête", mobile_app)
         self.assertIn("buildPreparedWorksiteSyncBatch", local_db)
         self.assertIn("findReusableWorksiteSyncOperation", local_db)
         self.assertIn("PreparedWorksiteSyncBatch", local_types)
@@ -553,6 +604,9 @@ class Sprint0ScaffoldTest(unittest.TestCase):
         self.assertIn("Synchronisation de ce chantier", mobile_app)
         self.assertIn("getWorksiteSyncStatus", mobile_app)
         self.assertIn("getPreparedWorksiteSyncBatchStatus", mobile_app)
+        self.assertIn("Actions locales à synchroniser", mobile_app)
+        self.assertIn("getLocalSyncOperationTypeLabel", mobile_app)
+        self.assertIn("getLocalSyncOperationTitle", mobile_app)
         self.assertIn("getTerrainObjectSyncStatusCopy", sync_status)
         self.assertIn("getWorksiteSyncStatusCopy", sync_status)
         self.assertIn("getPreparedWorksiteSyncBatchStatusCopy", sync_status)

@@ -30,14 +30,12 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
           class="desktop-card app-shell-header-card"
           eyebrow="Conformeo Desktop"
           [title]="ctx.currentMembership?.organization?.name ?? 'Conforméo'"
-          description="Une navigation bureau plus claire pour passer du cockpit aux modules sans rester dans une page unique scrollée."
+          description="Bureau"
         >
           <div class="session-header" *ngIf="ctx.currentMembership as membership">
             <div class="workspace-shell-copy">
-              <p class="meta">Connecté en tant que {{ ctx.session?.user?.display_name }}</p>
-              <h2>{{ membership.organization.name }}</h2>
-              <p class="small">
-                Rôle actuel : <strong>{{ membership.membership.role_code }}</strong>
+              <p class="meta workspace-shell-meta">
+                {{ ctx.session?.user?.display_name }} · {{ membership.membership.role_code }}
               </p>
               <div class="chips">
                 <cfm-status-chip
@@ -68,15 +66,13 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
                   </select>
                 </label>
               </ng-container>
+
+              <cfm-button type="button" variant="secondary" (click)="ctx.logout()">
+                Se déconnecter
+              </cfm-button>
             </div>
           </div>
         </cfm-card>
-
-        <div class="session-actions workspace-shell-actions">
-          <cfm-button type="button" variant="secondary" (click)="ctx.logout()">
-            Se déconnecter
-          </cfm-button>
-        </div>
 
         <nav class="app-nav">
           <a
@@ -86,20 +82,29 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
             routerLinkActive="is-active"
             [routerLinkActiveOptions]="{ exact: true }"
           >
-            <span class="nav-icon-placeholder" aria-hidden="true">icon</span>
+            <span class="nav-icon-placeholder" aria-hidden="true"></span>
             <cfm-status-chip [label]="item.label" [tone]="item.tone" />
           </a>
         </nav>
 
+        <div class="workspace-feedback-stack" *ngIf="ctx.errorMessage || ctx.isWorkspaceRefreshing || ctx.feedbackMessage">
+          <div class="feedback error" *ngIf="ctx.errorMessage">
+            <span class="feedback-title">Action indisponible</span>
+            <span class="feedback-body">{{ ctx.errorMessage }}</span>
+          </div>
+          <div class="feedback progress" *ngIf="ctx.isWorkspaceRefreshing && !ctx.errorMessage">
+            <span class="feedback-title">Mise à jour en cours</span>
+            <span class="feedback-body">Les données restent visibles pendant l’actualisation.</span>
+          </div>
+          <div class="feedback success" *ngIf="ctx.feedbackMessage && !ctx.errorMessage">
+            <span class="feedback-title">Action terminée</span>
+            <span class="feedback-body">{{ ctx.feedbackMessage }}</span>
+          </div>
+        </div>
+
         <section class="workspace-body">
           <router-outlet />
         </section>
-
-        <p class="feedback error" *ngIf="ctx.errorMessage">{{ ctx.errorMessage }}</p>
-        <p class="feedback progress" *ngIf="ctx.isWorkspaceRefreshing && !ctx.errorMessage">
-          Actualisation en cours. Les données restent visibles.
-        </p>
-        <p class="feedback success" *ngIf="ctx.feedbackMessage && !ctx.errorMessage">{{ ctx.feedbackMessage }}</p>
       </section>
     </main>
   `,
