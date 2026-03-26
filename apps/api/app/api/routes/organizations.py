@@ -11,6 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.api.external_dependencies import (
+    get_organization_registry_sync_service,
+    get_site_location_enrichment_service,
+)
 from app.api.dependencies import OrganizationAccessContext, require_module_enabled, require_permissions
 from app.core.access import list_organization_modules
 from app.core.audit import list_audit_logs, record_audit_log
@@ -33,6 +37,11 @@ from app.core.building_safety import (
     serialize_building_safety_item,
 )
 from app.core.duerp import list_duerp_entries, serialize_duerp_entry
+from app.core.external_enrichment import (
+    clear_site_location_enrichment,
+    mark_site_location_enrichment_failed,
+    resolve_site_location_failure_reason,
+)
 from app.core.regulatory_export_pdf import build_regulatory_export_pdf
 from app.core.regulation import build_regulatory_profile_snapshot
 from app.core.regulatory_evidence import (
@@ -91,6 +100,14 @@ from app.db.models import (
     UserStatus,
 )
 from app.db.session import get_db_session
+from app.integrations.base import (
+    ExternalIntegrationError,
+    ExternalProviderConfigError,
+    ExternalProviderDisabledError,
+    ExternalProviderResponseError,
+    ExternalProviderUnavailableError,
+    ExternalResourceNotFoundError,
+)
 from app.schemas.audit_log import AuditLogRead
 from app.schemas.auth import ModuleToggleRequest
 from app.schemas.billing_customer import (
@@ -105,11 +122,18 @@ from app.schemas.building_safety import (
     BuildingSafetyItemUpdateRequest,
 )
 from app.schemas.cockpit import CockpitSummaryRead
-from app.schemas.organization import OrganizationProfileUpdateRequest, OrganizationRead
+from app.schemas.organization import (
+    OrganizationCompanyRegistryEnrichmentRead,
+    OrganizationCompanyRegistryEnrichmentRequest,
+    OrganizationEnrichmentFieldRead,
+    OrganizationProfileUpdateRequest,
+    OrganizationRead,
+)
 from app.schemas.organization_module import OrganizationModuleRead
 from app.schemas.organization_site import (
     OrganizationSiteCreateRequest,
     OrganizationSiteRead,
+    SiteLocationEnrichmentRead,
     OrganizationSiteUpdateRequest,
 )
 from app.schemas.regulation import OrganizationRegulatoryProfileRead
@@ -144,6 +168,7 @@ from app.schemas.worksite import (
     WorksiteSignatureRead,
     WorksiteSummaryRead,
 )
+from app.services import OrganizationRegistrySyncService, SiteLocationEnrichmentService
 
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -207,6 +232,64 @@ def serialize_change_value(value: object | None) -> object | None:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def raise_http_from_external_error(exc: ExternalIntegrationError) -> None:
+    if isinstance(exc, ExternalResourceNotFoundError):
+        raise HTTPException(status_code=404, detail=exc.detail) from exc
+    if isinstance(exc, (ExternalProviderDisabledError, ExternalProviderConfigError, ExternalProviderUnavailableError)):
+        raise HTTPException(status_code=503, detail=exc.detail) from exc
+    if isinstance(exc, ExternalProviderResponseError):
+        raise HTTPException(status_code=502, detail=exc.detail) from exc
+    raise HTTPException(status_code=502, detail="Erreur d'intégration externe.") from exc
+
+
+def build_organization_enrichment_response(
+    organization,
+    result,
+) -> OrganizationCompanyRegistryEnrichmentRead:
+    return OrganizationCompanyRegistryEnrichmentRead(
+        organization=OrganizationRead.model_validate(organization),
+        company=result.company,
+        establishment=result.establishment,
+        field_results=[
+            OrganizationEnrichmentFieldRead.model_validate(decision.as_dict())
+            for decision in result.field_decisions
+        ],
+        source_meta=result.company.source_meta,
+        synced_at=result.synced_at,
+    )
+
+
+def build_site_location_enrichment_response(site, result) -> SiteLocationEnrichmentRead:
+    return SiteLocationEnrichmentRead(
+        site=OrganizationSiteRead.model_validate(site),
+        status=result.status,
+        geocoding_status=result.geocoding_status,
+        risk_status=result.risk_status,
+        notes=result.notes,
+        sources=result.sources,
+    )
+
+
+def try_auto_enrich_site(
+    *,
+    site: OrganizationSite,
+    service: SiteLocationEnrichmentService,
+) -> dict[str, dict[str, object | None]]:
+    try:
+        result = service.enrich_site(site)
+        return result.changes
+    except ExternalIntegrationError as exc:
+        logger.warning(
+            "Site auto-enrichment failed",
+            extra={
+                "organization_id": str(site.organization_id),
+                "site_id": str(site.id),
+                "provider": exc.provider,
+            },
+        )
+        return mark_site_location_enrichment_failed(site, reason=resolve_site_location_failure_reason(exc))
 
 
 def is_profile_ready(payload: OrganizationProfileUpdateRequest) -> bool:
@@ -1172,6 +1255,44 @@ def update_profile(
     return OrganizationRead.model_validate(organization)
 
 
+@router.post(
+    "/{organization_id}/enrich-from-company-registry",
+    response_model=OrganizationCompanyRegistryEnrichmentRead,
+)
+def enrich_profile_from_company_registry(
+    organization_id: UUID,
+    payload: OrganizationCompanyRegistryEnrichmentRequest,
+    context: OrganizationAccessContext = Depends(require_permissions("organization:update")),
+    service: OrganizationRegistrySyncService = Depends(get_organization_registry_sync_service),
+    db: Session = Depends(get_db_session),
+) -> OrganizationCompanyRegistryEnrichmentRead:
+    organization = context.organization
+    try:
+        result = service.enrich_organization(
+            organization,
+            siren=payload.siren,
+            siret=payload.siret,
+        )
+    except ExternalIntegrationError as exc:
+        raise_http_from_external_error(exc)
+
+    if result.changes:
+        record_audit_log(
+            db,
+            organization_id=organization.id,
+            actor_user=context.user,
+            action_type=AuditAction.UPDATE,
+            target_type="organization",
+            target_id=organization.id,
+            target_display=organization.name,
+            changes=result.changes,
+        )
+        db.commit()
+        db.refresh(organization)
+
+    return build_organization_enrichment_response(organization, result)
+
+
 @router.get(
     "/{organization_id}/sites",
     response_model=list[OrganizationSiteRead],
@@ -1265,6 +1386,7 @@ def create_site(
     organization_id: UUID,
     payload: OrganizationSiteCreateRequest,
     context: OrganizationAccessContext = Depends(require_permissions("organization:update")),
+    enrichment_service: SiteLocationEnrichmentService = Depends(get_site_location_enrichment_service),
     db: Session = Depends(get_db_session),
 ) -> OrganizationSiteRead:
     site = OrganizationSite(
@@ -1276,6 +1398,7 @@ def create_site(
     )
     db.add(site)
     db.flush()
+    try_auto_enrich_site(site=site, service=enrichment_service)
     record_audit_log(
         db,
         organization_id=context.organization.id,
@@ -1289,6 +1412,7 @@ def create_site(
             "address": site.address,
             "site_type": site.site_type.value,
             "status": site.status.value,
+            "location_enrichment_status": site.location_enrichment_status,
         },
     )
     db.commit()
@@ -1305,10 +1429,13 @@ def update_site(
     site_id: UUID,
     payload: OrganizationSiteUpdateRequest,
     context: OrganizationAccessContext = Depends(require_permissions("organization:update")),
+    enrichment_service: SiteLocationEnrichmentService = Depends(get_site_location_enrichment_service),
     db: Session = Depends(get_db_session),
 ) -> OrganizationSiteRead:
     site = get_site_or_404(db, context.organization.id, site_id)
     changes: dict[str, dict[str, object | None]] = {}
+    address_changed = False
+    auto_enrichment_changes: dict[str, dict[str, object | None]] = {}
 
     field_updates = {
         "name": payload.name.strip() if payload.name is not None else None,
@@ -1327,11 +1454,21 @@ def update_site(
                 "to": serialize_change_value(next_value),
             }
             setattr(site, field_name, next_value)
+            if field_name == "address":
+                address_changed = True
+
+    if address_changed:
+        for field_name, field_change in clear_site_location_enrichment(site).items():
+            changes[field_name] = field_change
+        auto_enrichment_changes = try_auto_enrich_site(site=site, service=enrichment_service)
+        for field_name, field_change in auto_enrichment_changes.items():
+            changes[field_name] = field_change
 
     if not changes:
         return OrganizationSiteRead.model_validate(site)
 
-    site.version += 1
+    if not address_changed or not auto_enrichment_changes:
+        site.version += 1
     action_type = (
         AuditAction.STATUS_CHANGE
         if list(changes.keys()) == ["status"]
@@ -1350,6 +1487,64 @@ def update_site(
     db.commit()
     db.refresh(site)
     return OrganizationSiteRead.model_validate(site)
+
+
+@router.post(
+    "/{organization_id}/sites/{site_id}/enrich-location",
+    response_model=SiteLocationEnrichmentRead,
+)
+def enrich_site_location(
+    organization_id: UUID,
+    site_id: UUID,
+    context: OrganizationAccessContext = Depends(require_permissions("organization:update")),
+    service: SiteLocationEnrichmentService = Depends(get_site_location_enrichment_service),
+    db: Session = Depends(get_db_session),
+) -> SiteLocationEnrichmentRead:
+    site = get_site_or_404(db, context.organization.id, site_id)
+    try:
+        result = service.enrich_site(site)
+    except ExternalIntegrationError as exc:
+        logger.warning(
+            "Manual site enrichment failed",
+            extra={
+                "organization_id": str(context.organization.id),
+                "site_id": str(site.id),
+                "provider": exc.provider,
+            },
+        )
+        failure_changes = mark_site_location_enrichment_failed(
+            site,
+            reason=resolve_site_location_failure_reason(exc),
+        )
+        if failure_changes:
+            record_audit_log(
+                db,
+                organization_id=context.organization.id,
+                actor_user=context.user,
+                action_type=AuditAction.UPDATE,
+                target_type="organization_site",
+                target_id=site.id,
+                target_display=site.name,
+                changes=failure_changes,
+            )
+            db.commit()
+        raise_http_from_external_error(exc)
+
+    if result.changes:
+        record_audit_log(
+            db,
+            organization_id=context.organization.id,
+            actor_user=context.user,
+            action_type=AuditAction.UPDATE,
+            target_type="organization_site",
+            target_id=site.id,
+            target_display=site.name,
+            changes=result.changes,
+        )
+        db.commit()
+        db.refresh(site)
+
+    return build_site_location_enrichment_response(site, result)
 
 
 @router.get(

@@ -1,7 +1,10 @@
 import { CommonModule } from "@angular/common";
 import { Component, inject } from "@angular/core";
+import { FormsModule } from "@angular/forms";
 import {
+  CfmButtonComponent,
   CfmCardComponent,
+  CfmInputComponent,
   CfmStatusChipComponent,
 } from "@conformeo/ui";
 
@@ -12,7 +15,10 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
   standalone: true,
   imports: [
     CommonModule,
+    FormsModule,
+    CfmButtonComponent,
     CfmCardComponent,
+    CfmInputComponent,
     CfmStatusChipComponent,
   ],
   template: `
@@ -163,11 +169,140 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         title="Chantiers à suivre"
         description="Les points utiles pour décider vite."
       >
-        <div class="hero-chips">
-          <cfm-status-chip
-            [label]="ctx.worksiteOverviewCountLabel"
-            [tone]="ctx.filteredDashboardWorksiteOverviewItems.length > 0 ? 'calm' : 'neutral'"
-          />
+        <section class="home-site-entry" *ngIf="ctx.canManageOrganization || ctx.organizationSites.length > 0">
+          <div class="home-site-entry-header">
+            <div class="hero-copy">
+              <h3>Sites d’entreprise</h3>
+              <p class="small">
+                Ajoutez un site pour lancer l’enrichissement d’adresse et de risques sans ouvrir le module chantier.
+              </p>
+            </div>
+
+            <div class="hero-chips">
+              <cfm-status-chip
+                [label]="ctx.organizationSites.length > 0
+                  ? ctx.organizationSites.length + ' site' + (ctx.organizationSites.length > 1 ? 's' : '')
+                  : 'Aucun site'"
+                [tone]="ctx.organizationSites.length > 0 ? 'calm' : 'neutral'"
+              />
+
+              <cfm-button
+                *ngIf="ctx.canManageOrganization && !ctx.homeSiteQuickCreateOpen"
+                type="button"
+                variant="secondary"
+                size="sm"
+                (click)="ctx.openHomeSiteQuickCreate()"
+              >
+                Ajouter un site
+              </cfm-button>
+            </div>
+          </div>
+
+          <form class="home-site-form" *ngIf="ctx.canManageOrganization && ctx.homeSiteQuickCreateOpen" (ngSubmit)="ctx.createSite()">
+            <cfm-input
+              [(ngModel)]="ctx.siteForm.name"
+              name="homeSiteName"
+              type="text"
+              label="Nom du site"
+              placeholder="Ex. Atelier Lyon Nord"
+              [disabled]="ctx.organizationSiteSaving"
+              required
+            />
+
+            <cfm-input
+              [(ngModel)]="ctx.siteForm.address"
+              name="homeSiteAddress"
+              type="text"
+              label="Adresse utile"
+              placeholder="Ex. 12 rue Carnot, 69002 Lyon"
+              [disabled]="ctx.organizationSiteSaving"
+              required
+            />
+
+            <div class="home-site-form-actions">
+              <cfm-button type="submit" [disabled]="ctx.organizationSiteSaving || !ctx.canCreateSite">
+                {{ ctx.organizationSiteSaving ? "Création en cours" : "Créer le site" }}
+              </cfm-button>
+              <cfm-button
+                type="button"
+                variant="ghost"
+                [disabled]="ctx.organizationSiteSaving"
+                (click)="ctx.closeHomeSiteQuickCreate()"
+              >
+                Annuler
+              </cfm-button>
+            </div>
+          </form>
+
+          <ul class="alert-list home-site-list" *ngIf="ctx.organizationSites.length > 0; else emptyHomeSites">
+            <li class="alert-item home-site-item" *ngFor="let site of ctx.organizationSites">
+              <ng-container *ngIf="ctx.getSiteEnrichmentUiState(site) as enrichment">
+                <div class="alert-copy home-site-copy">
+                  <div class="home-site-heading">
+                    <strong>{{ site.name }}</strong>
+                    <div class="hero-chips">
+                      <cfm-status-chip [label]="ctx.getSiteTypeLabel(site.site_type)" tone="calm" />
+                    </div>
+                  </div>
+
+                  <p>{{ site.address }}</p>
+
+                  <div class="home-site-enrichment">
+                    <div class="home-site-enrichment-header">
+                      <cfm-status-chip [label]="enrichment.label" [tone]="enrichment.tone" />
+                      <span class="small" *ngIf="site.location_enrichment_attempted_at">
+                        Dernière tentative : {{ site.location_enrichment_attempted_at | date: "dd/MM/yyyy HH:mm" }}
+                      </span>
+                    </div>
+
+                    <p>{{ enrichment.detail }}</p>
+                    <p class="small" *ngIf="enrichment.reasonLabel">{{ enrichment.reasonLabel }}</p>
+                    <p class="small" *ngIf="site.normalized_address">Adresse reconnue : {{ site.normalized_address }}</p>
+                    <p class="small" *ngIf="site.site_risk_summary">{{ site.site_risk_summary }}</p>
+                  </div>
+                </div>
+
+                <cfm-button
+                  *ngIf="ctx.canManageOrganization"
+                  type="button"
+                  [variant]="enrichment.showRetryAsPrimary ? 'secondary' : 'ghost'"
+                  size="sm"
+                  class="home-site-action"
+                  [disabled]="ctx.organizationSiteEnrichmentBusyId === site.id"
+                  (click)="ctx.relaunchSiteEnrichment(site)"
+                >
+                  {{
+                    ctx.organizationSiteEnrichmentBusyId === site.id
+                      ? "Relance en cours"
+                      : enrichment.retryLabel
+                  }}
+                </cfm-button>
+              </ng-container>
+            </li>
+          </ul>
+
+          <ng-template #emptyHomeSites>
+            <div class="empty-copy home-site-empty" *ngIf="!ctx.homeSiteQuickCreateOpen">
+              <p class="state-title">Aucun site enregistré</p>
+              <p class="small">Ajoutez un premier site pour lancer automatiquement l’enrichissement.</p>
+            </div>
+          </ng-template>
+        </section>
+
+        <div class="home-worksite-overview-header">
+          <div class="hero-copy">
+            <h3>Chantiers à suivre</h3>
+            <p class="small">
+              Les points utiles pour décider vite.
+            </p>
+          </div>
+
+          <div class="hero-chips">
+            <cfm-status-chip
+              [label]="ctx.worksiteOverviewCountLabel"
+              [tone]="ctx.filteredDashboardWorksiteOverviewItems.length > 0 ? 'calm' : 'neutral'"
+            />
+          </div>
         </div>
 
         <ul class="alert-list" *ngIf="ctx.filteredDashboardWorksiteOverviewItems.length > 0; else emptyWorksites">
@@ -328,6 +463,10 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         min-width: 0;
       }
 
+      .home-section-card {
+        height: 100%;
+      }
+
       .hero-line,
       .other-section-header {
         display: flex;
@@ -402,6 +541,41 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         min-width: 0;
       }
 
+      .home-site-entry {
+        display: grid;
+        gap: 0.9rem;
+        margin-bottom: 1rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid rgba(33, 68, 49, 0.08);
+      }
+
+      .home-site-entry-header,
+      .home-worksite-overview-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.85rem;
+        min-width: 0;
+      }
+
+      .home-site-form {
+        display: grid;
+        gap: 0.8rem;
+        padding: 0.95rem 1rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(33, 68, 49, 0.12);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 246, 0.9));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.9),
+          0 10px 22px rgba(18, 33, 42, 0.04);
+      }
+
+      .home-site-form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
       .alert-list {
         list-style: none;
         margin: 0;
@@ -444,6 +618,43 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
 
       .other-section {
         align-content: start;
+      }
+
+      .home-site-list {
+        gap: 0.75rem;
+      }
+
+      .home-site-item {
+        align-items: flex-start;
+      }
+
+      .home-site-copy {
+        gap: 0.32rem;
+      }
+
+      .home-site-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        min-width: 0;
+      }
+
+      .home-site-enrichment {
+        display: grid;
+        gap: 0.24rem;
+        margin-top: 0.12rem;
+      }
+
+      .home-site-enrichment-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem;
+      }
+
+      .home-site-action {
+        align-self: flex-start;
       }
 
       .worksite-copy p {
@@ -611,7 +822,9 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
 
       @media (max-width: 1024px) {
         .hero-line,
-        .other-section-header {
+        .other-section-header,
+        .home-site-entry-header,
+        .home-worksite-overview-header {
           flex-direction: column;
         }
 
@@ -619,7 +832,8 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
           justify-content: flex-start;
         }
 
-        .alert-item {
+        .alert-item,
+        .home-site-form-actions {
           flex-direction: column;
         }
       }
@@ -647,6 +861,10 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
           padding: 0.82rem 0.88rem;
         }
 
+        .home-site-form {
+          padding: 0.88rem 0.9rem;
+        }
+
         .home-section-card--other .dashboard-kpi-card {
           gap: 0.55rem;
           padding: 0.86rem 0.9rem;
@@ -661,6 +879,12 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
         .home-section-card--other .alert-copy,
         .home-section-card--other .hero-copy {
           gap: 0.22rem;
+        }
+
+        .home-site-entry {
+          gap: 0.82rem;
+          margin-bottom: 0.9rem;
+          padding-bottom: 0.9rem;
         }
       }
     `,

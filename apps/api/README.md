@@ -194,6 +194,42 @@ Comportement :
 - la commande refuse de s'executer si la base contient deja un `User` ou une `Organization`
 - si aucun module n'est passe avec `--enable-module`, les lignes sont creees mais restent desactivees
 
+## Seed de demonstration local
+
+Pour enrichir une organisation locale deja bootstrappee avec un petit jeu de donnees coherent pour :
+- la home
+- les sites et leur enrichissement
+- le module Reglementation
+
+Depuis la racine du monorepo :
+
+```bash
+pnpm seed:demo --organization-slug conformeo-dev
+```
+
+Ce seed met a jour l'organisation cible et injecte seulement :
+- 3 sites de demonstration
+- 2 elements securite batiment
+- 1 entree DUERP
+- 3 preuves reglementaires
+
+Comportement :
+- idempotent sur les noms et fichiers de demonstration connus
+- rejouable sans recréer de volume inutile
+- oriente demo locale, pas donnees de production
+
+Pour nettoyer uniquement ce jeu de donnees :
+
+```bash
+pnpm seed:demo --organization-slug conformeo-dev --clean-only
+```
+
+Le champ d'etat d'enrichissement site reste purement metier :
+- `location_enrichment_status`
+- `location_enrichment_last_error_reason`
+
+Le seed n'expose aucun payload fournisseur brut et n'ajoute pas de logique metier supplementaire.
+
 ## Audit log minimal
 
 Sprint 0 trace uniquement les ecritures critiques deja presentes dans le socle :
@@ -237,6 +273,151 @@ Le plan de prévention simplifié réutilise :
 - le donneur d'ordre si le client Facturation correspondant est connu
 - les contacts utiles disponibles
 - un contexte d'intervention, des points de vigilance et des consignes simples
+
+## Intégrations externes backend
+
+Un premier socle d’intégration externe est maintenant exposé sous :
+
+```bash
+GET /api/external/company/search?q=
+GET /api/external/company/{siren}
+GET /api/external/establishment/{siret}
+GET /api/external/geocode/search?q=
+GET /api/external/geocode/reverse?lat=&lon=
+GET /api/external/regulation/search?q=
+GET /api/external/regulation/{id}
+GET /api/external/site-risks?address=
+GET /api/external/site-risks/geocode?lat=&lon=
+```
+
+Principes retenus :
+- aucune route ne parle directement à un fournisseur externe
+- chaque fournisseur est encapsulé dans `app/integrations/`
+- les routes passent par des services métier dans `app/services/`
+- les payloads exposés sont normalisés via `app/schemas/external.py`
+- la provenance remonte via `ExternalSourceMeta`
+- les réponses brutes des fournisseurs ne sont pas renvoyées au frontend
+
+Fournisseurs phase 1 :
+- Annuaire des Entreprises / SIRENE : recherche entreprise, détail SIREN, détail SIRET
+- Géoplateforme : géocodage direct et inverse
+- Légifrance : recherche générique et consultation de texte/article
+- Géorisques : synthèse de risques site à partir d’un point ou d’une adresse
+
+Phase 2 branche ce socle sur deux flux métier backend réels :
+
+```bash
+POST /organizations/{organization_id}/enrich-from-company-registry
+POST /organizations/{organization_id}/sites/{site_id}/enrich-location
+```
+
+Comportement métier ajouté :
+- enrichissement organisation à partir d'un `siren` ou d'un `siret`
+- persistance d'un snapshot registre séparé des champs saisis manuellement
+- préremplissage prudent de `legal_name` et `headquarters_address` si la valeur locale est vide
+- conservation des champs manuels si un conflit local/externe est détecté
+- normalisation d'adresse, géocodage et synthèse de risques sur les sites
+- purge des données de géocodage/risques devenues obsolètes si l'adresse d'un site change
+- auto-enrichissement site déclenché après `POST /organizations/{organization_id}/sites`
+- auto-enrichissement site relancé après `PATCH /organizations/{organization_id}/sites/{site_id}` si l'adresse change réellement
+
+Champs enrichis organisation :
+- `registry_siren`
+- `registry_headquarters_siret`
+- `registry_company_name`
+- `registry_activity_code`
+- `registry_status`
+- `registry_address`
+- `registry_source_meta`
+- `registry_last_synced_at`
+
+Champs enrichis site :
+- `normalized_address`
+- `latitude`
+- `longitude`
+- `geocoding_score`
+- `location_source_meta`
+- `location_last_synced_at`
+- `location_enrichment_status`
+- `location_enrichment_attempted_at`
+- `location_enrichment_last_error_reason`
+- `site_risk_level`
+- `site_risk_summary`
+- `site_risk_items`
+- `site_risk_source_meta`
+- `site_risk_last_synced_at`
+
+Statuts métier de l'auto-enrichissement site :
+- `enriched` : géocodage et synthèse de risques disponibles
+- `partial` : géocodage disponible, mais résultat ambigu ou synthèse de risques indisponible
+- `no_match` : aucune adresse exploitable n'a été trouvée
+- `failed` : une erreur fournisseur a empêché l'enrichissement automatique, sans bloquer la création ou la mise à jour du site
+
+Code métier complémentaire :
+- `location_enrichment_last_error_reason`
+- ce champ stocke un code court de lecture produit/support
+- ce n'est pas un message technique brut fournisseur
+
+Valeurs possibles :
+- `provider_unavailable`
+- `provider_response_invalid`
+- `no_geocode_match`
+- `ambiguous_address`
+- `risk_provider_unavailable`
+
+Règles de mapping :
+- `enriched` -> `location_enrichment_last_error_reason = null`
+- `no_match` -> `no_geocode_match`
+- `partial` avec géocodage ambigu -> `ambiguous_address`
+- `partial` avec risques indisponibles -> `risk_provider_unavailable`
+- `failed` sur indisponibilité fournisseur -> `provider_unavailable`
+- `failed` sur payload/réponse invalide -> `provider_response_invalid`
+
+Quand utiliser encore le endpoint manuel :
+- relancer un site resté en `no_match`
+- relancer un site resté en `partial`
+- relancer un site resté en `failed`
+- relancer après correction manuelle de l'adresse
+
+Comportement en cas d'échec externe :
+- si l'annuaire entreprise est indisponible, l'enrichissement organisation retourne une erreur backend propre sans modifier le profil
+- si le géocodage site échoue, le site reste intact et l'enrichissement retourne un statut `no_match`
+- si la synthèse Géorisques échoue, le géocodage est conservé et l'enrichissement retourne un statut `partial`
+- si le provider externe tombe pendant l'auto-enrichissement site, le flux principal `create/update` reste réussi et le site passe en `failed`
+- aucune réponse brute fournisseur n'est exposée au domaine métier ou au frontend
+
+Variables d’environnement à renseigner :
+- `CONFORMEO_EXTERNAL_INTEGRATIONS_ENABLED`
+- `CONFORMEO_EXTERNAL_PROVIDER_MAX_RETRIES`
+- `CONFORMEO_EXTERNAL_PROVIDER_USER_AGENT`
+- `CONFORMEO_EXTERNAL_CACHE_ENABLED`
+- `CONFORMEO_EXTERNAL_COMPANY_CACHE_TTL_SECONDS`
+- `CONFORMEO_EXTERNAL_GEOCODE_CACHE_TTL_SECONDS`
+- `CONFORMEO_EXTERNAL_REGULATION_CACHE_TTL_SECONDS`
+- `CONFORMEO_EXTERNAL_SITE_RISKS_CACHE_TTL_SECONDS`
+- `CONFORMEO_EXTERNAL_ANNUAIRE_ENTREPRISES_*`
+- `CONFORMEO_EXTERNAL_GEOPLATEFORME_*`
+- `CONFORMEO_EXTERNAL_LEGIFRANCE_*`
+- `CONFORMEO_EXTERNAL_GEORISQUES_*`
+
+Notes de configuration :
+- Légifrance passe par PISTE avec OAuth2 ; il faut renseigner `CLIENT_ID`, `CLIENT_SECRET` et, si besoin, pointer vers les URLs sandbox PISTE.
+- Géorisques v2 nécessite un jeton Bearer dédié.
+- Annuaire des Entreprises et le géocodage Géoplateforme sont publics, sans secret applicatif.
+
+Ajouter un nouveau fournisseur :
+1. créer un provider dans `app/integrations/`
+2. mapper la réponse brute vers des schémas internes propres
+3. exposer son usage via un service dans `app/services/`
+4. ajouter une route fine dans `app/api/routes/external.py`
+5. couvrir mapping, erreurs et endpoint dans `tests/`
+
+Résilience mise en place :
+- timeout explicite par fournisseur
+- retries bornés
+- cache TTL simple, optionnel
+- erreurs fournisseur normalisées
+- fallback `503` / `502` propre sans crash global
 
 Le `POST` permet seulement un ajustement léger avant export :
 - date utile

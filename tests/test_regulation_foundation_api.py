@@ -20,6 +20,7 @@ if str(API_ROOT) not in sys.path:
 os.environ.setdefault("CONFORMEO_AUTH_TOKEN_SECRET", "test-only-secret-change-me-123456")
 
 from app.api.dependencies import get_db_session
+from app.api.external_dependencies import get_site_location_enrichment_service
 from app.core.security import hash_password
 from app.db.models import Base, Organization, OrganizationMembership, OrganizationStatus, User, UserStatus
 from app.main import create_app
@@ -54,7 +55,15 @@ class RegulationFoundationApiTest(unittest.TestCase):
             finally:
                 db.close()
 
+        class NoopSiteLocationService:
+            def enrich_site(self, site):
+                class Result:
+                    changes = {}
+
+                return Result()
+
         self.app.dependency_overrides[get_db_session] = override_db
+        self.app.dependency_overrides[get_site_location_enrichment_service] = NoopSiteLocationService
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:

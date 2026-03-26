@@ -1,5 +1,11 @@
 import { InjectionToken, TemplateRef } from "@angular/core";
-import type { AuthSession, MembershipAccess, ModuleCode } from "@conformeo/contracts";
+import type {
+  AuthSession,
+  MembershipAccess,
+  ModuleCode,
+  OrganizationSiteRecord,
+  OrganizationSiteType,
+} from "@conformeo/contracts";
 import type { CfmTone } from "@conformeo/ui";
 
 export type DesktopNavigationItem = {
@@ -84,6 +90,21 @@ export type DesktopHomeCustomerItem = {
   signalTone: CfmTone;
 };
 
+export type DesktopHomeSiteEnrichmentState = {
+  label: string;
+  tone: CfmTone;
+  detail: string;
+  reasonLabel: string | null;
+  retryLabel: string;
+  showRetryAsPrimary: boolean;
+};
+
+export type DesktopHomeSiteCreateDraft = {
+  name: string;
+  address: string;
+  siteType: OrganizationSiteType;
+};
+
 export interface DesktopShellContext {
   readonly currentMembership: MembershipAccess | null;
   readonly session: AuthSession | null;
@@ -101,8 +122,21 @@ export interface DesktopShellContext {
   readonly coordinationTodoCountLabel: string;
   readonly dashboardCustomerOverviewItems: DesktopHomeCustomerItem[];
   readonly customerOverviewCountLabel: string;
+  readonly canManageOrganization: boolean;
+  readonly organizationSiteSaving: boolean;
+  readonly organizationSiteEnrichmentBusyId: string | null;
+  readonly homeSiteQuickCreateOpen: boolean;
+  readonly organizationSites: OrganizationSiteRecord[];
+  readonly siteForm: DesktopHomeSiteCreateDraft;
+  readonly canCreateSite: boolean;
   getWorkspaceTemplate(name: WorkspaceTemplateName): TemplateRef<unknown> | null;
   getModuleNavigationLabel(moduleCode: ModuleCode): string;
+  getSiteTypeLabel(siteType: OrganizationSiteType): string;
+  getSiteEnrichmentUiState(site: OrganizationSiteRecord): DesktopHomeSiteEnrichmentState;
+  openHomeSiteQuickCreate(): void;
+  closeHomeSiteQuickCreate(): void;
+  createSite(): Promise<void>;
+  relaunchSiteEnrichment(site: OrganizationSiteRecord): Promise<void>;
   changeOrganization(): Promise<void>;
   logout(): void;
 }

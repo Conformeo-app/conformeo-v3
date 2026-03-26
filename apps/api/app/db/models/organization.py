@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel, postgres_enum
@@ -36,6 +36,17 @@ class Organization(Base, IdentifiedModel, AuditModel, VersionedModel):
     contact_email: Mapped[str | None] = mapped_column(String(160), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     headquarters_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registry_siren: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    registry_headquarters_siret: Mapped[str | None] = mapped_column(String(14), nullable=True)
+    registry_company_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    registry_activity_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    registry_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    registry_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registry_source_meta: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    registry_last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

@@ -23,6 +23,7 @@ import type {
   RegulatoryEvidenceCreateRequest,
   RegulatoryEvidenceRecord,
   OrganizationSiteCreateRequest,
+  OrganizationSiteEnrichmentRecord,
   OrganizationSiteRecord,
   OrganizationSiteUpdateRequest,
   QuoteCreateRequest,
@@ -498,6 +499,18 @@ export async function createOrganizationSite(
     body: JSON.stringify(payload)
   });
   return parseJsonResponse<OrganizationSiteRecord>(response);
+}
+
+export async function enrichOrganizationSiteLocation(
+  accessToken: string,
+  organizationId: string,
+  siteId: string
+): Promise<OrganizationSiteEnrichmentRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/sites/${siteId}/enrich-location`, {
+    method: "POST",
+    headers: buildHeaders(accessToken, organizationId)
+  });
+  return parseJsonResponse<OrganizationSiteEnrichmentRecord>(response);
 }
 
 export async function listBillingCustomers(

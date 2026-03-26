@@ -27,6 +27,7 @@ import type {
   OrganizationRegulatoryProfileRecord,
   OrganizationProfileUpdateRequest,
   OrganizationRecord,
+  OrganizationSiteLocationEnrichmentErrorReason,
   OrganizationSiteRecord,
   OrganizationSiteType,
   RegulatoryEvidenceLinkKind,
@@ -79,6 +80,7 @@ import {
   downloadQuotePdf,
   downloadRegulatoryExportPdf,
   downloadWorksiteSummaryPdf,
+  enrichOrganizationSiteLocation,
   fetchCockpitSummary,
   fetchOrganizationProfile,
   fetchOrganizationRegulatoryProfile,
@@ -118,6 +120,7 @@ import {
 } from "./organization-client";
 import {
   DESKTOP_SHELL_CONTEXT,
+  type DesktopHomeSiteEnrichmentState,
   type DesktopShellContext,
   type WorkspaceTemplateName,
 } from "./desktop-shell-context";
@@ -212,6 +215,88 @@ type DashboardActionItem = {
   title: string;
   description: string;
   context: string | null;
+};
+type RegulatoryShowcaseSummary = {
+  statusLabel: string;
+  tone: CfmTone;
+  headline: string;
+  summary: string;
+  context: string | null;
+  scoreSummary: string;
+  profileLabel: string;
+  profileTone: CfmTone;
+  siteLabel: string | null;
+  siteTone: CfmTone;
+};
+type RegulatoryShowcaseActionKind = "scroll" | "site_enrichment";
+type RegulatoryScoreDriverItem = {
+  id: string;
+  label: string;
+  detail: string;
+  statusLabel: string;
+  tone: CfmTone;
+};
+type RegulatoryShowcasePriorityItem = {
+  id: string;
+  title: string;
+  familyLabel: string;
+  levelLabel: string;
+  tone: CfmTone;
+  impact: string;
+  context: string | null;
+  focusLabel: string | null;
+  actionLabel: string;
+  actionKind: RegulatoryShowcaseActionKind;
+  sectionId: string;
+  obligationId: string | null;
+  siteId: string | null;
+  rank: number;
+};
+type RegulatoryShowcaseFamilyCard = {
+  id: RegulatoryObligationCategory;
+  label: string;
+  countLabel: string;
+  detail: string;
+  statusLabel: string;
+  tone: CfmTone;
+  highlights: Array<{
+    label: string;
+    value: string;
+  }>;
+  actionLabel: string;
+  actionKind: RegulatoryShowcaseActionKind;
+  sectionId: string;
+  obligationId: string | null;
+  siteId: string | null;
+};
+type RegulatoryShowcaseActionItem = {
+  id: string;
+  title: string;
+  detail: string;
+  supportLabel: string | null;
+  actionLabel: string;
+  tone: CfmTone;
+  actionKind: RegulatoryShowcaseActionKind;
+  sectionId: string;
+  obligationId: string | null;
+  siteId: string | null;
+};
+type RegulatoryShowcaseEvidenceItem = {
+  id: string;
+  title: string;
+  detail: string;
+  statusLabel: string;
+  tone: CfmTone;
+  contextLabel: string | null;
+};
+type RegulatoryAllSiteSourceKind = "declared" | "duerp" | "building_safety" | "evidence";
+type RegulatoryAllSiteItem = {
+  key: string;
+  siteId: string | null;
+  name: string;
+  address: string | null;
+  declaredSite: OrganizationSiteRecord | null;
+  sourceKinds: RegulatoryAllSiteSourceKind[];
 };
 type DashboardPerspectiveCard = {
   id: string;
@@ -333,7 +418,7 @@ type DashboardCustomerOverviewItem = {
     CfmCardComponent,
     CfmEmptyStateComponent,
     CfmInputComponent,
-    CfmStatusChipComponent
+    CfmStatusChipComponent,
   ],
   providers: [
     {
@@ -1706,87 +1791,343 @@ type DashboardCustomerOverviewItem = {
           </cfm-card>
 
           <ng-container *ngIf="shouldShowWorkspaceContent && currentMembership && isReglementationEnabled">
-            <cfm-card
-              *ngIf="isOnboardingPending"
-              class="desktop-card"
-              eyebrow="S2-001"
-              title="Onboarding entreprise"
-              description="Quelques informations essentielles pour démarrer sans jargon réglementaire ni formulaire intimidant."
-            >
-              <div class="chips">
-                <cfm-status-chip label="Étape 1 sur 2" tone="progress" />
-                <cfm-status-chip label="Essentiel uniquement" tone="calm" />
-              </div>
+            <ng-container *ngIf="regulatoryShowcaseSummary as summary">
+              <section class="regulatory-showcase-workspace">
+                <cfm-card
+                  class="desktop-card regulatory-showcase-card"
+                  eyebrow="Réglementation"
+                  title="Copilote conformité"
+                  description="Une lecture claire de votre situation, des priorités et des preuves déjà prêtes."
+                >
+                  <div class="regulatory-hero">
+                    <div class="regulatory-hero-copy">
+                      <div class="chips regulatory-showcase-chips">
+                        <cfm-status-chip [label]="summary.statusLabel" [tone]="summary.tone" />
+                        <cfm-status-chip [label]="summary.profileLabel" [tone]="summary.profileTone" />
+                        <cfm-status-chip [label]="getObligationCountLabel()" [tone]="regulatoryObligations.length > 0 ? 'calm' : 'neutral'" />
+                        <cfm-status-chip
+                          [label]="regulatoryEvidenceAvailableCount + ' preuve' + (regulatoryEvidenceAvailableCount > 1 ? 's' : '')"
+                          [tone]="regulatoryEvidenceAvailableCount > 0 ? 'success' : 'neutral'"
+                        />
+                        <cfm-status-chip *ngIf="summary.siteLabel" [label]="summary.siteLabel" [tone]="summary.siteTone" />
+                      </div>
 
-              <form class="profile-form" (ngSubmit)="completeOnboarding()">
-                <cfm-input
-                  [(ngModel)]="profileForm.name"
-                  name="onboardingName"
-                  type="text"
-                  label="Nom de l’entreprise"
-                  placeholder="Ex. Conforméo Services"
-                  required
-                />
+                      <div class="regulatory-hero-copy-block">
+                        <h3>{{ summary.headline }}</h3>
+                        <p>{{ summary.summary }}</p>
+                        <p class="small" *ngIf="summary.context">{{ summary.context }}</p>
+                      </div>
 
-                <cfm-input
-                  [(ngModel)]="profileForm.activityLabel"
-                  name="onboardingActivity"
-                  type="text"
-                  label="Activité principale"
-                  placeholder="Ex. maintenance multitechnique"
-                  required
-                />
+                      <div class="inline-actions">
+                        <cfm-button
+                          *ngIf="topRegulatoryPriority as topPriority"
+                          type="button"
+                          [disabled]="isRegulatoryShowcaseActionBusy(topPriority)"
+                          (click)="runRegulatoryShowcaseAction(topPriority)"
+                        >
+                          {{ getRegulatoryShowcaseActionLabel(topPriority) }}
+                        </cfm-button>
+                        <cfm-button
+                          type="button"
+                          variant="secondary"
+                          [disabled]="!canReadOrganization || regulatoryExporting"
+                          (click)="exportRegulatoryPdf()"
+                        >
+                          {{ regulatoryExporting ? "Génération en cours" : "Exporter le dossier" }}
+                        </cfm-button>
+                      </div>
+                    </div>
 
-                <label class="field">
-                  <span>Présence de salariés</span>
-                  <select [(ngModel)]="profileForm.hasEmployees" name="onboardingHasEmployees" required>
-                    <option value="">Choisir</option>
-                    <option value="yes">Oui</option>
-                    <option value="no">Non</option>
-                  </select>
-                </label>
+                    <aside class="regulatory-score-card">
+                      <span class="small regulatory-score-label">Niveau de conformité</span>
+                      <strong class="regulatory-score-value">{{ regulatoryComplianceScore }}/100</strong>
+                      <cfm-status-chip [label]="summary.statusLabel" [tone]="summary.tone" />
+                      <p>{{ summary.scoreSummary }}</p>
+                      <p class="small">
+                        {{ overdueRegulatoryObligationCount + globalBuildingSafetyOverdueCount }} sujet{{ overdueRegulatoryObligationCount + globalBuildingSafetyOverdueCount > 1 ? "s" : "" }}
+                        prioritaire{{ overdueRegulatoryObligationCount + globalBuildingSafetyOverdueCount > 1 ? "s" : "" }} · {{ regulatoryObligationsToVerifyCount }} à vérifier
+                      </p>
 
-                <cfm-input
-                  [(ngModel)]="profileForm.employeeCount"
-                  name="onboardingEmployeeCount"
-                  type="number"
-                  label="Effectif"
-                  placeholder="Ex. 12"
-                />
+                      <div class="regulatory-score-breakdown" *ngIf="regulatoryScoreDrivers.length > 0">
+                        <span class="small regulatory-score-label">Ce qui compose le score</span>
+                        <ul class="regulatory-score-breakdown-list">
+                          <li *ngFor="let item of regulatoryScoreDrivers">
+                            <div class="regulatory-score-breakdown-copy">
+                              <strong>{{ item.label }}</strong>
+                              <span>{{ item.detail }}</span>
+                            </div>
+                            <cfm-status-chip [label]="item.statusLabel" [tone]="item.tone" />
+                          </li>
+                        </ul>
+                      </div>
+                    </aside>
+                  </div>
+                </cfm-card>
 
-                <cfm-input
-                  [(ngModel)]="profileForm.contactEmail"
-                  name="onboardingContactEmail"
-                  type="email"
-                  label="Email de contact"
-                  placeholder="contact@entreprise.fr"
-                  required
-                />
+                <div class="regulatory-showcase-secondary-grid">
+                  <cfm-card
+                    class="desktop-card"
+                    eyebrow="Priorités"
+                    title="Priorités du moment"
+                    description="Trois sujets maximum pour avancer sans se disperser."
+                  >
+                    <div class="regulatory-priority-grid" *ngIf="regulatoryPriorityItems.length > 0; else emptyRegulatoryPriorities">
+                      <article class="regulatory-priority-card" *ngFor="let item of regulatoryPriorityItems">
+                        <div class="obligation-heading">
+                          <div class="detail-copy">
+                            <h3>{{ item.title }}</h3>
+                            <p>{{ item.impact }}</p>
+                          </div>
+                          <div class="chips">
+                            <cfm-status-chip *ngIf="item.focusLabel" [label]="item.focusLabel" tone="neutral" />
+                            <cfm-status-chip [label]="item.familyLabel" tone="calm" />
+                            <cfm-status-chip [label]="item.levelLabel" [tone]="item.tone" />
+                          </div>
+                        </div>
 
-                <div class="form-actions">
-                  <cfm-button type="submit" [disabled]="organizationProfileSaving || !canSubmitOnboarding">
-                    {{ organizationProfileSaving ? "Initialisation en cours" : "Initialiser l’entreprise" }}
-                  </cfm-button>
+                        <p class="small" *ngIf="item.context">{{ item.context }}</p>
+
+                        <div class="inline-actions">
+                          <cfm-button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            [disabled]="isRegulatoryShowcaseActionBusy(item)"
+                            (click)="runRegulatoryShowcaseAction(item)"
+                          >
+                            {{ getRegulatoryShowcaseActionLabel(item) }}
+                          </cfm-button>
+                        </div>
+                      </article>
+                    </div>
+
+                    <ng-template #emptyRegulatoryPriorities>
+                      <cfm-empty-state
+                        title="Aucune priorité immédiate"
+                        description="La situation réglementaire reste calme pour le moment. Gardez simplement les preuves à jour."
+                      />
+                    </ng-template>
+                  </cfm-card>
+
+                  <cfm-card
+                    class="desktop-card"
+                    eyebrow="Familles"
+                    title="Familles réglementaires"
+                    description="Une lecture modulaire pour voir vite où regarder, sans liste confuse."
+                  >
+                    <div class="regulatory-family-grid">
+                      <article class="regulatory-family-card" *ngFor="let family of regulatoryFamilyCards">
+                        <div class="obligation-heading">
+                          <strong>{{ family.label }}</strong>
+                          <cfm-status-chip [label]="family.statusLabel" [tone]="family.tone" />
+                        </div>
+
+                        <p class="regulatory-family-count">{{ family.countLabel }}</p>
+                        <p>{{ family.detail }}</p>
+
+                        <ul class="regulatory-family-highlights">
+                          <li *ngFor="let highlight of family.highlights">
+                            <span>{{ highlight.label }}</span>
+                            <strong>{{ highlight.value }}</strong>
+                          </li>
+                        </ul>
+
+                        <cfm-button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          [disabled]="isRegulatoryShowcaseActionBusy(family)"
+                          (click)="runRegulatoryShowcaseAction(family)"
+                        >
+                          {{ getRegulatoryShowcaseActionLabel(family) }}
+                        </cfm-button>
+                      </article>
+                    </div>
+                  </cfm-card>
                 </div>
-              </form>
-            </cfm-card>
 
-            <cfm-card
-              class="desktop-card"
-              eyebrow="S2-002"
-              title="Profil entreprise"
-              description="Un profil clair et exploitable, avec seulement les informations utiles au périmètre réglementaire V1."
-            >
-              <div class="chips" *ngIf="organizationProfile">
-                <cfm-status-chip
-                  [label]="isOnboardingPending ? 'Onboarding à finaliser' : 'Profil initialisé'"
-                  [tone]="isOnboardingPending ? 'progress' : 'success'"
-                />
-                <cfm-status-chip
-                  [label]="organizationProfile.has_employees === true ? 'Avec salariés' : organizationProfile.has_employees === false ? 'Sans salariés' : 'Salariés à préciser'"
-                  [tone]="organizationProfile.has_employees === true ? 'success' : organizationProfile.has_employees === false ? 'calm' : 'warning'"
-                />
-              </div>
+                <cfm-card
+                  class="desktop-card"
+                  eyebrow="Actions & preuves"
+                  title="Actions recommandées"
+                  description="Ce que vous pouvez faire maintenant et ce que vous pouvez déjà démontrer."
+                >
+                  <div class="regulatory-support-grid">
+                    <section class="regulatory-support-block">
+                      <div class="obligation-heading">
+                        <div class="detail-copy">
+                          <h3>Actions recommandées</h3>
+                          <p>Des actions courtes, claires et immédiatement exploitables.</p>
+                        </div>
+                        <cfm-status-chip
+                          [label]="regulatoryRecommendedActions.length + ' action' + (regulatoryRecommendedActions.length > 1 ? 's' : '')"
+                          [tone]="regulatoryRecommendedActions.length > 0 ? 'progress' : 'neutral'"
+                        />
+                      </div>
+
+                      <p class="small regulatory-support-summary" *ngIf="regulatoryRecommendedActions.length > 0">
+                        {{ regulatoryRecommendedActionsSummary }}
+                      </p>
+
+                      <ul class="regulatory-action-list" *ngIf="regulatoryRecommendedActions.length > 0; else emptyRegulatoryActions">
+                        <li *ngFor="let action of regulatoryRecommendedActions">
+                          <div class="regulatory-support-copy">
+                            <strong>{{ action.title }}</strong>
+                            <span>{{ action.detail }}</span>
+                            <span class="small" *ngIf="action.supportLabel">{{ action.supportLabel }}</span>
+                          </div>
+                          <cfm-button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            [disabled]="isRegulatoryShowcaseActionBusy(action)"
+                            (click)="runRegulatoryShowcaseAction(action)"
+                          >
+                            {{ getRegulatoryShowcaseActionLabel(action) }}
+                          </cfm-button>
+                        </li>
+                      </ul>
+
+                      <ng-template #emptyRegulatoryActions>
+                        <cfm-empty-state
+                          title="Aucune action urgente"
+                          description="Le socle réglementaire est posé. Conservez simplement un rythme de mise à jour."
+                        />
+                      </ng-template>
+                    </section>
+
+                    <section class="regulatory-support-block">
+                      <div class="obligation-heading">
+                        <div class="detail-copy">
+                          <h3>Preuves et documents</h3>
+                          <p>Des éléments concrets pour montrer ce qui est déjà prêt ou démontrable.</p>
+                        </div>
+                        <div class="chips">
+                          <cfm-status-chip
+                            [label]="regulatoryEvidenceAvailableCount + ' prêt' + (regulatoryEvidenceAvailableCount > 1 ? 's' : '')"
+                            [tone]="regulatoryEvidenceAvailableCount > 0 ? 'success' : 'neutral'"
+                          />
+                          <cfm-status-chip
+                            [label]="regulatoryEvidenceCoverageCount + ' obligation' + (regulatoryEvidenceCoverageCount > 1 ? 's' : '') + ' couverte' + (regulatoryEvidenceCoverageCount > 1 ? 's' : '')"
+                            [tone]="regulatoryEvidenceCoverageCount > 0 ? 'calm' : 'neutral'"
+                          />
+                        </div>
+                      </div>
+
+                      <p class="small regulatory-support-summary" *ngIf="regulatoryProofSupportSummary">
+                        {{ regulatoryProofSupportSummary }}
+                      </p>
+
+                      <ul class="regulatory-proof-list" *ngIf="regulatoryEvidenceShowcaseItems.length > 0; else emptyRegulatoryProofs">
+                        <li *ngFor="let proof of regulatoryEvidenceShowcaseItems">
+                          <div class="regulatory-support-copy">
+                            <strong>{{ proof.title }}</strong>
+                            <span>{{ proof.detail }}</span>
+                          </div>
+
+                          <div class="chips">
+                            <cfm-status-chip [label]="proof.statusLabel" [tone]="proof.tone" />
+                            <cfm-status-chip *ngIf="proof.contextLabel" [label]="proof.contextLabel" tone="neutral" />
+                          </div>
+                        </li>
+                      </ul>
+
+                      <ng-template #emptyRegulatoryProofs>
+                        <cfm-empty-state
+                          title="Aucune preuve encore prête"
+                          description="Ajoutez une première pièce simple pour matérialiser la conformité et nourrir la démo."
+                        />
+                      </ng-template>
+                    </section>
+                  </div>
+                </cfm-card>
+              </section>
+            </ng-container>
+
+            <ng-container *ngIf="isOnboardingPending || organizationProfile">
+
+                <cfm-card
+                  *ngIf="isOnboardingPending"
+                  class="desktop-card"
+                  eyebrow="S2-001"
+                  title="Onboarding entreprise"
+                  description="Quelques informations essentielles pour démarrer sans jargon réglementaire ni formulaire intimidant."
+                >
+                  <div class="chips">
+                    <cfm-status-chip label="Étape 1 sur 2" tone="progress" />
+                    <cfm-status-chip label="Essentiel uniquement" tone="calm" />
+                  </div>
+
+                  <form class="profile-form" (ngSubmit)="completeOnboarding()">
+                    <cfm-input
+                      [(ngModel)]="profileForm.name"
+                      name="onboardingName"
+                      type="text"
+                      label="Nom de l’entreprise"
+                      placeholder="Ex. Conforméo Services"
+                      required
+                    />
+
+                    <cfm-input
+                      [(ngModel)]="profileForm.activityLabel"
+                      name="onboardingActivity"
+                      type="text"
+                      label="Activité principale"
+                      placeholder="Ex. maintenance multitechnique"
+                      required
+                    />
+
+                    <label class="field">
+                      <span>Présence de salariés</span>
+                      <select [(ngModel)]="profileForm.hasEmployees" name="onboardingHasEmployees" required>
+                        <option value="">Choisir</option>
+                        <option value="yes">Oui</option>
+                        <option value="no">Non</option>
+                      </select>
+                    </label>
+
+                    <cfm-input
+                      [(ngModel)]="profileForm.employeeCount"
+                      name="onboardingEmployeeCount"
+                      type="number"
+                      label="Effectif"
+                      placeholder="Ex. 12"
+                    />
+
+                    <cfm-input
+                      [(ngModel)]="profileForm.contactEmail"
+                      name="onboardingContactEmail"
+                      type="email"
+                      label="Email de contact"
+                      placeholder="contact@entreprise.fr"
+                      required
+                    />
+
+                    <div class="form-actions">
+                      <cfm-button type="submit" [disabled]="organizationProfileSaving || !canSubmitOnboarding">
+                        {{ organizationProfileSaving ? "Initialisation en cours" : "Initialiser l’entreprise" }}
+                      </cfm-button>
+                    </div>
+                  </form>
+                </cfm-card>
+
+                <cfm-card
+                  id="reg-profile-section"
+                  class="desktop-card"
+                  eyebrow="S2-002"
+                  title="Profil entreprise"
+                  description="Un profil clair et exploitable, avec seulement les informations utiles au périmètre réglementaire V1."
+                >
+                  <div class="chips" *ngIf="organizationProfile">
+                    <cfm-status-chip
+                      [label]="isOnboardingPending ? 'Onboarding à finaliser' : 'Profil initialisé'"
+                      [tone]="isOnboardingPending ? 'progress' : 'success'"
+                    />
+                    <cfm-status-chip
+                      [label]="organizationProfile.has_employees === true ? 'Avec salariés' : organizationProfile.has_employees === false ? 'Sans salariés' : 'Salariés à préciser'"
+                      [tone]="organizationProfile.has_employees === true ? 'success' : organizationProfile.has_employees === false ? 'calm' : 'warning'"
+                    />
+                  </div>
 
               <form class="profile-form" (ngSubmit)="saveProfile()" *ngIf="organizationProfile">
                 <cfm-input
@@ -1884,23 +2225,24 @@ type DashboardCustomerOverviewItem = {
                     {{ organizationProfileSaving ? "Enregistrement en cours" : "Enregistrer le profil" }}
                   </cfm-button>
                 </div>
-              </form>
-            </cfm-card>
+                  </form>
+                </cfm-card>
 
-            <cfm-card
-              *ngIf="organizationProfile && !isOnboardingPending"
-              class="desktop-card"
-              eyebrow="S2-005"
-              title="Questionnaire réglementaire court"
-              description="Trois questions courtes pour affiner le profil réglementaire sans vous demander d'expertise juridique."
-            >
-              <div class="chips">
-                <cfm-status-chip label="3 questions utiles" tone="calm" />
-                <cfm-status-chip
-                  [label]="isQualificationQuestionnaireComplete ? 'Questionnaire complété' : 'Questionnaire à compléter'"
-                  [tone]="isQualificationQuestionnaireComplete ? 'success' : 'progress'"
-                />
-              </div>
+                <cfm-card
+                  *ngIf="organizationProfile && !isOnboardingPending"
+                  id="reg-profile-questionnaire-section"
+                  class="desktop-card"
+                  eyebrow="S2-005"
+                  title="Questionnaire réglementaire court"
+                  description="Trois questions courtes pour affiner le profil réglementaire sans vous demander d'expertise juridique."
+                >
+                  <div class="chips">
+                    <cfm-status-chip label="3 questions utiles" tone="calm" />
+                    <cfm-status-chip
+                      [label]="isQualificationQuestionnaireComplete ? 'Questionnaire complété' : 'Questionnaire à compléter'"
+                      [tone]="isQualificationQuestionnaireComplete ? 'success' : 'progress'"
+                    />
+                  </div>
 
               <p class="small">
                 Ces réponses améliorent la lecture du périmètre réglementaire. Si vous laissez un point à préciser,
@@ -1952,14 +2294,16 @@ type DashboardCustomerOverviewItem = {
                     {{ organizationProfileSaving ? "Enregistrement en cours" : "Enregistrer le questionnaire" }}
                   </cfm-button>
                 </div>
-              </form>
-            </cfm-card>
+                  </form>
+                </cfm-card>
+            </ng-container>
 
             <cfm-card
+              id="reg-sites-section"
               class="desktop-card"
               eyebrow="S2-003"
-              title="Sites et bâtiments"
-              description="Une structure simple de sites rattachés à l’entreprise pour préparer le futur périmètre réglementaire."
+              title="Sites et localisation"
+              description="Des sites clairs, enrichis et exploitables pour fiabiliser la lecture réglementaire par adresse ou bâtiment."
             >
               <form class="site-form" (ngSubmit)="createSite()">
                 <cfm-input
@@ -2003,49 +2347,107 @@ type DashboardCustomerOverviewItem = {
                 </div>
               </form>
 
-              <ul class="site-list" *ngIf="organizationSites.length > 0; else emptySites">
-                <li *ngFor="let site of organizationSites">
-                  <div class="site-copy">
-                    <div class="site-heading">
-                      <strong>{{ site.name }}</strong>
-                      <div class="chips">
-                        <cfm-status-chip [label]="getSiteTypeLabel(site.site_type)" tone="calm" />
-                        <cfm-status-chip
-                          [label]="site.status === 'active' ? 'Actif' : 'Archivé'"
-                          [tone]="site.status === 'active' ? 'success' : 'neutral'"
-                        />
+              <ul class="site-list" *ngIf="regulatoryAllSites.length > 0; else emptySites">
+                <li *ngFor="let site of regulatoryAllSites">
+                  <ng-container *ngIf="site.declaredSite as declaredSite; else inferredRegulatorySite">
+                    <div class="site-copy">
+                      <div class="site-heading">
+                        <strong>{{ declaredSite.name }}</strong>
+                        <div class="chips">
+                          <cfm-status-chip [label]="getSiteTypeLabel(declaredSite.site_type)" tone="calm" />
+                          <cfm-status-chip
+                            [label]="declaredSite.status === 'active' ? 'Actif' : 'Archivé'"
+                            [tone]="declaredSite.status === 'active' ? 'success' : 'neutral'"
+                          />
+                        </div>
+                      </div>
+                      <span>{{ declaredSite.address }}</span>
+
+                      <div class="site-enrichment" *ngIf="getSiteEnrichmentUiState(declaredSite) as enrichment">
+                        <div class="site-enrichment-header">
+                          <cfm-status-chip [label]="enrichment.label" [tone]="enrichment.tone" />
+                          <span class="site-enrichment-attempted" *ngIf="declaredSite.location_enrichment_attempted_at">
+                            Dernière tentative :
+                            {{ declaredSite.location_enrichment_attempted_at | date: "dd/MM/yyyy HH:mm" }}
+                          </span>
+                        </div>
+
+                        <span class="site-enrichment-detail">{{ enrichment.detail }}</span>
+                        <span class="site-enrichment-reason" *ngIf="enrichment.reasonLabel">
+                          {{ enrichment.reasonLabel }}
+                        </span>
+                        <span class="site-enrichment-meta" *ngIf="declaredSite.normalized_address">
+                          Adresse reconnue : {{ declaredSite.normalized_address }}
+                        </span>
+                        <span class="site-enrichment-meta" *ngIf="declaredSite.site_risk_summary">
+                          {{ declaredSite.site_risk_summary }}
+                        </span>
+                        <span class="site-enrichment-meta" *ngIf="site.sourceKinds.length > 1">
+                          {{ getRegulatoryAllSiteDetail(site) }}
+                        </span>
                       </div>
                     </div>
-                    <span>{{ site.address }}</span>
-                  </div>
 
-                  <cfm-button
-                    *ngIf="canManageOrganization"
-                    type="button"
-                    variant="secondary"
-                    [disabled]="organizationSiteStatusBusyId === site.id"
-                    (click)="toggleSiteStatus(site)"
-                  >
-                    {{
-                      organizationSiteStatusBusyId === site.id
-                        ? "Mise à jour en cours"
-                        : site.status === 'active'
-                          ? "Archiver"
-                          : "Réactiver"
-                    }}
-                  </cfm-button>
+                    <div class="site-actions" *ngIf="canManageOrganization">
+                      <cfm-button
+                        *ngIf="getSiteEnrichmentUiState(declaredSite) as enrichment"
+                        type="button"
+                        [variant]="enrichment.showRetryAsPrimary ? 'secondary' : 'ghost'"
+                        size="sm"
+                        [disabled]="organizationSiteEnrichmentBusyId === declaredSite.id"
+                        (click)="relaunchSiteEnrichment(declaredSite)"
+                      >
+                        {{
+                          organizationSiteEnrichmentBusyId === declaredSite.id
+                            ? "Relance en cours"
+                            : enrichment.retryLabel
+                        }}
+                      </cfm-button>
+
+                      <cfm-button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        [disabled]="organizationSiteStatusBusyId === declaredSite.id"
+                        (click)="toggleSiteStatus(declaredSite)"
+                      >
+                        {{
+                          organizationSiteStatusBusyId === declaredSite.id
+                            ? "Mise à jour en cours"
+                            : declaredSite.status === 'active'
+                              ? "Archiver"
+                              : "Réactiver"
+                        }}
+                      </cfm-button>
+                    </div>
+                  </ng-container>
+
+                  <ng-template #inferredRegulatorySite>
+                    <div class="site-copy">
+                      <div class="site-heading">
+                        <strong>{{ site.name }}</strong>
+                        <div class="chips">
+                          <cfm-status-chip label="Site repéré" tone="calm" />
+                          <cfm-status-chip [label]="getRegulatoryAllSiteSourceLabel(site)" tone="neutral" />
+                        </div>
+                      </div>
+                      <span *ngIf="site.address">{{ site.address }}</span>
+                      <span class="site-enrichment-detail">{{ getRegulatoryAllSiteDetail(site) }}</span>
+                    </div>
+                  </ng-template>
                 </li>
               </ul>
 
-              <ng-template #emptySites>
-                <cfm-empty-state
-                  title="Aucun site déclaré"
+                  <ng-template #emptySites>
+                    <cfm-empty-state
+                      title="Aucun site déclaré"
                   description="Ajoutez un premier site ou bâtiment pour structurer progressivement l’entreprise."
                 />
               </ng-template>
             </cfm-card>
 
             <cfm-card
+              id="reg-building-safety-section"
               class="desktop-card"
               eyebrow="S2-012 · S2-013 · S2-014"
               title="Sécurité bâtiment"
@@ -2274,10 +2676,11 @@ type DashboardCustomerOverviewItem = {
             </cfm-card>
 
             <cfm-card
+              id="reg-obligations-section"
               class="desktop-card"
               eyebrow="S2-004 · S2-010 · S2-011"
-              title="Obligations à préparer"
-              description="Une première lecture utile du périmètre réglementaire, basée sur le profil entreprise et les sites déclarés. Ce n’est pas un avis juridique."
+              title="Fiches d’obligations"
+              description="Ouvrez une fiche pour comprendre pourquoi elle s’applique, quoi faire maintenant et quelles preuves sont déjà prêtes."
             >
               <div class="card-header-actions">
                 <div class="chips" *ngIf="regulatoryProfile">
@@ -2291,14 +2694,11 @@ type DashboardCustomerOverviewItem = {
                   />
                 </div>
 
-                <cfm-button
-                  type="button"
-                  variant="secondary"
-                  [disabled]="!canReadOrganization || regulatoryExporting"
-                  (click)="exportRegulatoryPdf()"
-                >
-                  {{ regulatoryExporting ? "Génération en cours" : "Exporter le PDF" }}
-                </cfm-button>
+                <cfm-status-chip
+                  *ngIf="selectedRegulatoryObligation"
+                  [label]="selectedObligationEvidences.length + ' preuve' + (selectedObligationEvidences.length > 1 ? 's' : '')"
+                  [tone]="selectedObligationEvidences.length > 0 ? 'success' : 'neutral'"
+                />
               </div>
 
               <p class="small" *ngIf="regulatoryProfile?.missing_profile_items?.length">
@@ -2423,6 +2823,7 @@ type DashboardCustomerOverviewItem = {
             </cfm-card>
 
             <cfm-card
+              id="reg-duerp-section"
               class="desktop-card"
               eyebrow="S2-020"
               title="DUERP simplifié"
@@ -2581,10 +2982,11 @@ type DashboardCustomerOverviewItem = {
             </cfm-card>
 
             <cfm-card
+              id="reg-evidence-section"
               class="desktop-card"
               eyebrow="S2-021 · S2-022"
-              title="Pièces justificatives et conformité"
-              description="Ajoutez des preuves réglementaires simples et visualisez un statut de conformité lisible dans l’espace bureau."
+              title="Preuves et traçabilité"
+              description="Ajoutez des preuves simples, rattachez-les au bon sujet et gardez une lecture démontrable de la conformité."
             >
               <form class="evidence-form" (ngSubmit)="createEvidence()">
                 <label class="field">
@@ -4247,10 +4649,10 @@ type DashboardCustomerOverviewItem = {
       }
 
       .workspace {
-        width: min(1100px, 100%);
+        width: min(1240px, 100%);
         display: grid;
-        gap: 1.4rem;
-        padding-bottom: 2rem;
+        gap: 1.25rem;
+        padding-bottom: 2.2rem;
       }
 
       .app-shell {
@@ -4264,15 +4666,14 @@ type DashboardCustomerOverviewItem = {
       }
 
       .workspace-feedback-stack {
-        width: min(1100px, 100%);
+        width: min(1240px, 100%);
         display: grid;
         gap: 0.55rem;
-        margin-top: 0.55rem;
         align-content: start;
       }
 
       .desktop-card {
-        width: min(1100px, 100%);
+        width: min(1240px, 100%);
         position: relative;
         isolation: isolate;
       }
@@ -4431,6 +4832,21 @@ type DashboardCustomerOverviewItem = {
           0 4px 10px rgba(18, 33, 42, 0.028);
       }
 
+      .regulatory-showcase-workspace,
+      .regulatory-showcase-secondary-grid {
+        display: grid;
+        gap: 1.15rem;
+      }
+
+      .regulatory-showcase-workspace {
+        min-width: 0;
+      }
+
+      .regulatory-showcase-secondary-grid {
+        grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+        align-items: start;
+      }
+
       .app-nav-link {
         display: inline-flex;
         align-items: center;
@@ -4485,6 +4901,10 @@ type DashboardCustomerOverviewItem = {
       }
 
       @media (max-width: 1180px) {
+        .workspace {
+          gap: 1.15rem;
+        }
+
         .session-header {
           grid-template-columns: minmax(0, 1fr);
           gap: 0.44rem;
@@ -4498,6 +4918,15 @@ type DashboardCustomerOverviewItem = {
         .workspace-shell-copy,
         .workspace-shell-actions {
           gap: 0.28rem;
+        }
+
+        .regulatory-showcase-workspace,
+        .regulatory-showcase-secondary-grid {
+          gap: 1rem;
+        }
+
+        .regulatory-showcase-secondary-grid {
+          grid-template-columns: 1fr;
         }
 
         .app-nav {
@@ -4646,6 +5075,43 @@ type DashboardCustomerOverviewItem = {
         gap: 0.25rem;
       }
 
+      .site-actions {
+        display: grid;
+        justify-items: end;
+        align-content: start;
+        gap: 0.6rem;
+        min-width: 13.5rem;
+      }
+
+      .site-enrichment {
+        display: grid;
+        gap: 0.28rem;
+        margin-top: 0.28rem;
+        min-width: 0;
+      }
+
+      .site-enrichment-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .site-enrichment-attempted,
+      .site-enrichment-reason,
+      .site-enrichment-meta {
+        font-size: 0.86rem;
+        line-height: 1.4;
+        color: rgba(23, 49, 43, 0.72);
+        overflow-wrap: break-word;
+      }
+
+      .site-enrichment-detail {
+        font-size: 0.92rem;
+        line-height: 1.45;
+        color: #17312b;
+      }
+
       .obligation-copy {
         display: grid;
         gap: 0.45rem;
@@ -4736,6 +5202,204 @@ type DashboardCustomerOverviewItem = {
         justify-content: space-between;
         align-items: center;
         gap: 1rem;
+      }
+
+      .regulatory-showcase-card {
+        overflow: hidden;
+      }
+
+      .regulatory-hero,
+      .regulatory-support-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 2.2fr) minmax(280px, 1fr);
+        gap: 1.1rem;
+      }
+
+      .regulatory-hero-copy,
+      .regulatory-hero-copy-block,
+      .regulatory-score-card,
+      .regulatory-priority-card,
+      .regulatory-family-card,
+      .regulatory-support-block,
+      .regulatory-support-copy {
+        display: grid;
+      }
+
+      .regulatory-hero-copy,
+      .regulatory-score-card,
+      .regulatory-priority-card,
+      .regulatory-family-card,
+      .regulatory-support-block {
+        gap: 0.85rem;
+        padding: 1.12rem 1.18rem;
+        border-radius: 24px;
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        box-shadow:
+          0 16px 34px rgba(18, 33, 42, 0.05),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+      }
+
+      .regulatory-hero-copy {
+        background:
+          linear-gradient(180deg, rgba(248, 251, 249, 0.96), rgba(255, 255, 255, 0.86));
+      }
+
+      .regulatory-score-card,
+      .regulatory-family-card,
+      .regulatory-support-block {
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(244, 248, 247, 0.82));
+      }
+
+      .regulatory-priority-card {
+        background:
+          linear-gradient(180deg, rgba(247, 249, 244, 0.96), rgba(255, 255, 255, 0.86));
+      }
+
+      .regulatory-showcase-chips {
+        margin-bottom: 0.2rem;
+      }
+
+      .regulatory-hero-copy-block {
+        gap: 0.45rem;
+        max-width: 64ch;
+      }
+
+      .regulatory-hero-copy-block h3,
+      .regulatory-priority-card h3,
+      .regulatory-support-block h3 {
+        margin: 0;
+        font-size: 1.28rem;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+
+      .regulatory-hero-copy-block p,
+      .regulatory-priority-card p,
+      .regulatory-family-card p,
+      .regulatory-support-block p {
+        margin: 0;
+      }
+
+      .regulatory-score-label {
+        color: rgba(23, 49, 43, 0.72);
+      }
+
+      .regulatory-score-value {
+        font-size: clamp(2.4rem, 5vw, 3.4rem);
+        line-height: 0.95;
+        letter-spacing: -0.05em;
+        color: var(--cfm-color-ink);
+      }
+
+      .regulatory-score-breakdown,
+      .regulatory-score-breakdown-copy {
+        display: grid;
+      }
+
+      .regulatory-score-breakdown {
+        gap: 0.6rem;
+        padding-top: 0.2rem;
+      }
+
+      .regulatory-score-breakdown-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .regulatory-score-breakdown-list li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.8rem;
+        min-width: 0;
+        padding-top: 0.65rem;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+      }
+
+      .regulatory-score-breakdown-copy {
+        gap: 0.16rem;
+        min-width: 0;
+      }
+
+      .regulatory-score-breakdown-copy span,
+      .regulatory-support-summary {
+        color: var(--cfm-color-copy-muted);
+      }
+
+      .regulatory-priority-grid,
+      .regulatory-family-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem;
+      }
+
+      .regulatory-family-count {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #17312b;
+      }
+
+      .regulatory-family-highlights,
+      .regulatory-action-list,
+      .regulatory-proof-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+      }
+
+      .regulatory-family-highlights {
+        gap: 0.6rem;
+      }
+
+      .regulatory-family-highlights li,
+      .regulatory-action-list li,
+      .regulatory-proof-list li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.85rem;
+        min-width: 0;
+      }
+
+      .regulatory-family-highlights li {
+        padding-top: 0.65rem;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+      }
+
+      .regulatory-action-list,
+      .regulatory-proof-list {
+        gap: 0.85rem;
+      }
+
+      .regulatory-action-list li,
+      .regulatory-proof-list li {
+        padding: 0.95rem 1rem;
+        border-radius: 20px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(246, 250, 249, 0.78));
+        border: 1px solid rgba(15, 23, 42, 0.05);
+        box-shadow: 0 12px 24px rgba(18, 33, 42, 0.04);
+      }
+
+      .regulatory-support-copy {
+        gap: 0.24rem;
+        min-width: 0;
+      }
+
+      .regulatory-support-summary {
+        margin: -0.1rem 0 0;
+      }
+
+      @media (max-width: 1080px) {
+        .regulatory-priority-grid,
+        .regulatory-family-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
 
       .dashboard-grid {
@@ -5291,6 +5955,10 @@ type DashboardCustomerOverviewItem = {
         .building-safety-form,
         .duerp-form,
         .evidence-form,
+        .regulatory-hero,
+        .regulatory-support-grid,
+        .regulatory-priority-grid,
+        .regulatory-family-grid,
         .document-adjustment-form,
         .billing-line-editor,
         .detail-grid,
@@ -5323,6 +5991,20 @@ type DashboardCustomerOverviewItem = {
           min-width: 0;
           width: 100%;
         }
+
+        .regulatory-family-highlights li,
+        .regulatory-score-breakdown-list li,
+        .regulatory-action-list li,
+        .regulatory-proof-list li {
+          flex-direction: column;
+          align-items: start;
+        }
+
+        .site-actions {
+          width: 100%;
+          min-width: 0;
+          justify-items: stretch;
+        }
       }
     `
   ]
@@ -5334,7 +6016,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     "regulatory-evidences",
   ] as const;
   private static readonly DISABLE_BOOTSTRAP_SESSION_RESTORE = false;
-  private static readonly DISABLE_DO_CHECK_PERSISTENCE = false;
+  private static readonly DISABLE_DO_CHECK_PERSISTENCE = true;
   private static readonly WORKSPACE_LOADING_DISABLED = false;
   private static readonly WORKSPACE_DEBUG_ONLY_LABEL: string | null = null;
   private static readonly DISABLE_DEFERRED_WORKSPACE_SCROLL = false;
@@ -5359,6 +6041,8 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   organizationProfileSaving = false;
   organizationSiteSaving = false;
   organizationSiteStatusBusyId: string | null = null;
+  organizationSiteEnrichmentBusyId: string | null = null;
+  homeSiteQuickCreateOpen = false;
   organizationProfile: OrganizationRecord | null = null;
   organizationSites: OrganizationSiteRecord[] = [];
   regulatoryProfile: OrganizationRegulatoryProfileRecord | null = null;
@@ -5603,6 +6287,15 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   @ViewChild("chantierPageTemplate") private chantierPageTemplateRef?: TemplateRef<unknown>;
   @ViewChild("facturationPageTemplate") private facturationPageTemplateRef?: TemplateRef<unknown>;
   @ViewChild("coordinationPageTemplate") private coordinationPageTemplateRef?: TemplateRef<unknown>;
+  readonly boundRegulatoryShowcaseActionBusy = (action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    siteId: string | null;
+  }): boolean => this.isRegulatoryShowcaseActionBusy(action);
+  readonly boundRegulatoryShowcaseActionLabel = (action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    actionLabel: string;
+    siteId: string | null;
+  }): string => this.getRegulatoryShowcaseActionLabel(action);
 
   constructor() {
     this.router.events.subscribe((event) => {
@@ -7364,6 +8057,94 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     return this.organizationSites.filter((site) => site.status === "active");
   }
 
+  get regulatoryAllSites(): RegulatoryAllSiteItem[] {
+    const siteMap = new Map<string, RegulatoryAllSiteItem>();
+    const declaredSiteById = new Map(this.organizationSites.map((site) => [site.id, site]));
+    const declaredSiteBySignature = new Map(
+      this.organizationSites.map((site) => [this.getRegulatorySiteDedupKey(null, site.name, site.address), site] as const)
+    );
+
+    const addSiteReference = (
+      sourceKind: RegulatoryAllSiteSourceKind,
+      siteId: string | null,
+      name: string | null,
+      address: string | null = null
+    ): void => {
+      const trimmedName = name?.trim() ?? "";
+      const declaredSite = (
+        (siteId ? declaredSiteById.get(siteId) : undefined)
+        ?? declaredSiteBySignature.get(this.getRegulatorySiteDedupKey(null, trimmedName, address))
+        ?? null
+      );
+      const effectiveSiteId = siteId ?? declaredSite?.id ?? null;
+      const effectiveName = trimmedName || (declaredSite?.name ?? "");
+      const effectiveAddress = address?.trim() || declaredSite?.address || null;
+      const dedupKey = this.getRegulatorySiteDedupKey(effectiveSiteId, effectiveName, effectiveAddress);
+      if (!dedupKey || !effectiveName) {
+        return;
+      }
+
+      const existing = siteMap.get(dedupKey);
+      siteMap.set(dedupKey, {
+        key: dedupKey,
+        siteId: effectiveSiteId,
+        name: effectiveName,
+        address: effectiveAddress,
+        declaredSite: declaredSite ?? existing?.declaredSite ?? null,
+        sourceKinds: existing
+          ? Array.from(new Set([...existing.sourceKinds, sourceKind]))
+          : [sourceKind],
+      });
+    };
+
+    for (const site of this.organizationSites) {
+      addSiteReference("declared", site.id, site.name, site.address);
+    }
+
+    for (const entry of this.activeDuerpEntries) {
+      addSiteReference("duerp", entry.site_id, entry.site_name);
+    }
+
+    for (const item of this.buildingSafetyItems.filter((entry) => entry.status === "active")) {
+      addSiteReference("building_safety", item.site_id, item.site_name);
+    }
+
+    for (const evidence of this.regulatoryEvidences.filter((entry) => entry.status !== "archived")) {
+      if (evidence.link_kind === "site") {
+        addSiteReference("evidence", evidence.site_id, evidence.link_label);
+        continue;
+      }
+
+      if (evidence.building_safety_item_id) {
+        const linkedSafetyItem = this.buildingSafetyItems.find((item) => item.id === evidence.building_safety_item_id);
+        if (linkedSafetyItem) {
+          addSiteReference("evidence", linkedSafetyItem.site_id, linkedSafetyItem.site_name);
+          continue;
+        }
+      }
+
+      if (evidence.duerp_entry_id) {
+        const linkedDuerpEntry = this.duerpEntries.find((entry) => entry.id === evidence.duerp_entry_id);
+        if (linkedDuerpEntry) {
+          addSiteReference("evidence", linkedDuerpEntry.site_id, linkedDuerpEntry.site_name);
+          continue;
+        }
+      }
+
+      if (evidence.site_id) {
+        addSiteReference("evidence", evidence.site_id, evidence.link_label);
+      }
+    }
+
+    return [...siteMap.values()].sort((left, right) => {
+      const declaredRank = Number(Boolean(right.declaredSite)) - Number(Boolean(left.declaredSite));
+      if (declaredRank !== 0) {
+        return declaredRank;
+      }
+      return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
+    });
+  }
+
   get canCreateBuildingSafetyItem(): boolean {
     return Boolean(
       this.buildingSafetyForm.siteId
@@ -7436,6 +8217,512 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     );
   }
 
+  get regulatoryObligations(): ApplicableRegulatoryObligationRecord[] {
+    return this.regulatoryProfile?.applicable_obligations ?? [];
+  }
+
+  get regulatoryEvidenceAvailableCount(): number {
+    return this.regulatoryEvidences.filter((evidence) => evidence.status === "available").length;
+  }
+
+  get regulatoryEvidenceCoverageCount(): number {
+    const coveredObligations = new Set(
+      this.regulatoryEvidences
+        .filter((evidence) => evidence.status === "available" && evidence.obligation_id)
+        .map((evidence) => evidence.obligation_id as string)
+    );
+    return coveredObligations.size;
+  }
+
+  get regulatoryComplianceScore(): number {
+    const obligations = this.regulatoryObligations;
+    const hasHighRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
+    const weights: Record<ComplianceStatus, number> = {
+      compliant: 1,
+      in_progress: 0.72,
+      to_complete: 0.42,
+      to_verify: 0.24,
+      overdue: 0.08,
+    };
+
+    let score = obligations.length > 0
+      ? (obligations.reduce((total, obligation) => total + weights[obligation.status], 0) / obligations.length) * 100
+      : this.regulatoryProfile?.profile_status === "ready"
+        ? 58
+        : 34;
+
+    if (this.regulatoryProfile?.profile_status !== "ready") {
+      score -= 10;
+    }
+    if (this.regulatoryEvidenceAvailableCount === 0) {
+      score -= 8;
+    } else if (this.regulatoryEvidenceCoverageCount > 0) {
+      score += 4;
+    }
+
+    const siteInsight = this.getRegulatorySiteInsight();
+    if (siteInsight.tone === "warning") {
+      score -= 8;
+    } else if (siteInsight.tone === "progress") {
+      score -= 4;
+    } else if (siteInsight.tone === "success") {
+      score += 3;
+    }
+
+    if (this.globalBuildingSafetyOverdueCount > 0) {
+      score -= 6;
+    }
+
+    if (hasHighRiskWork && this.activeDuerpEntries.length === 0) {
+      score -= 6;
+    } else if (this.activeDuerpEntries.length > 0) {
+      score += 2;
+    }
+
+    return Math.max(18, Math.min(96, Math.round(score)));
+  }
+
+  get regulatoryScoreDrivers(): RegulatoryScoreDriverItem[] {
+    const missingProfileItems = this.regulatoryProfile?.missing_profile_items ?? [];
+    const profileReady = this.regulatoryProfile?.profile_status === "ready" && !this.isOnboardingPending;
+    const siteInsight = this.getRegulatorySiteInsight();
+    const allSites = this.regulatoryAllSites;
+    const activeDeclaredSites = this.activeOrganizationSites;
+    const inferredOnlySites = allSites.filter((site) => !site.declaredSite);
+    const problematicSite = this.getProblematicRegulatorySite();
+    const problematicSiteState = problematicSite ? this.getSiteEnrichmentUiState(problematicSite) : null;
+    const highRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
+    const highestSeverityEntry = this.getHighestPriorityDuerpEntry();
+    const nextEvidenceGap = this.getNextEvidenceGapObligation();
+    const highSeverityCount = this.activeDuerpEntries.filter((entry) => entry.severity === "high").length;
+
+    return [
+      {
+        id: "profile",
+        label: "Profil",
+        detail:
+          profileReady
+            ? "Base entreprise exploitable."
+            : missingProfileItems.length > 0
+              ? `Il manque encore ${missingProfileItems.slice(0, 2).join(", ")}.`
+              : "Les informations de base restent à compléter.",
+        statusLabel: profileReady ? "Exploitable" : "À compléter",
+        tone: profileReady ? "success" : "progress",
+      },
+      {
+        id: "sites",
+        label: "Sites",
+        detail:
+          allSites.length === 0
+            ? "Aucun site utile n'est encore déclaré."
+            : problematicSite && problematicSiteState
+              ? `${problematicSite.name} ${problematicSiteState.reasonLabel ? `: ${problematicSiteState.reasonLabel.toLowerCase()}.` : "reste à consolider."}`
+              : activeDeclaredSites.length === 0
+                ? `${allSites.length} site${allSites.length > 1 ? "s sont" : " est"} déjà suivi${allSites.length > 1 ? "s" : ""} dans le module.`
+                : inferredOnlySites.length > 0
+                  ? `${allSites.length} site${allSites.length > 1 ? "s sont" : " est"} visible${allSites.length > 1 ? "s" : ""}, dont ${inferredOnlySites.length} encore à consolider.`
+                  : `${activeDeclaredSites.length} site${activeDeclaredSites.length > 1 ? "s sont" : " est"} déjà exploitable${activeDeclaredSites.length > 1 ? "s" : ""}.`,
+        statusLabel:
+          allSites.length === 0
+            ? "À lancer"
+            : activeDeclaredSites.length === 0
+              ? "Suivis"
+              : problematicSiteState?.label ?? siteInsight.label ?? "Prêts",
+        tone:
+          allSites.length === 0
+            ? "progress"
+            : activeDeclaredSites.length === 0
+              ? "calm"
+              : problematicSiteState?.tone ?? siteInsight.tone,
+      },
+      {
+        id: "duerp",
+        label: "DUERP",
+        detail:
+          this.activeDuerpEntries.length === 0
+            ? highRiskWork
+              ? "Aucun risque actif n'est encore consigné."
+              : "Aucun risque actif remonté pour le moment."
+            : highSeverityCount > 0
+              ? `${highestSeverityEntry?.work_unit_name ?? "Le DUERP"} reste à consolider et à prouver.`
+              : "Le DUERP existe déjà et peut être enrichi progressivement.",
+        statusLabel:
+          this.activeDuerpEntries.length === 0
+            ? (highRiskWork ? "À ouvrir" : "Calme")
+            : highSeverityCount > 0
+              ? `${highSeverityCount} risque${highSeverityCount > 1 ? "s" : ""}`
+              : `${this.activeDuerpEntries.length} suivi${this.activeDuerpEntries.length > 1 ? "s" : ""}`,
+        tone:
+          this.activeDuerpEntries.length === 0
+            ? (highRiskWork ? "progress" : "neutral")
+            : highSeverityCount > 0
+              ? "warning"
+              : "progress",
+      },
+      {
+        id: "proofs",
+        label: "Preuves",
+        detail:
+          this.regulatoryEvidenceAvailableCount === 0
+            ? nextEvidenceGap
+              ? `La prochaine pièce utile concerne ${nextEvidenceGap.title.toLowerCase()}.`
+              : "Aucune preuve n'est encore rattachée."
+            : nextEvidenceGap
+              ? `La prochaine pièce utile concerne ${nextEvidenceGap.title.toLowerCase()}.`
+              : "Les preuves disponibles rendent déjà la conformité démontrable.",
+        statusLabel:
+          this.regulatoryEvidenceAvailableCount === 0
+            ? "À lancer"
+            : nextEvidenceGap
+              ? (this.regulatoryEvidenceCoverageCount > 0
+                ? `${this.regulatoryEvidenceCoverageCount} couverte${this.regulatoryEvidenceCoverageCount > 1 ? "s" : ""}`
+                : "Partielles")
+              : `${this.regulatoryEvidenceAvailableCount} prête${this.regulatoryEvidenceAvailableCount > 1 ? "s" : ""}`,
+        tone:
+          this.regulatoryEvidenceAvailableCount === 0
+            ? "progress"
+            : nextEvidenceGap
+              ? (this.regulatoryEvidenceCoverageCount > 0 ? "calm" : "progress")
+              : "success",
+      },
+    ];
+  }
+
+  get regulatoryRecommendedActionsSummary(): string {
+    if (this.regulatoryRecommendedActions.length === 0) {
+      return "Le module est déjà bien cadré pour le moment.";
+    }
+
+    const hasSiteAction = this.regulatoryRecommendedActions.some(
+      (action) => action.actionKind === "site_enrichment" || action.sectionId === "reg-sites-section"
+    );
+    const hasDuerpAction = this.regulatoryRecommendedActions.some((action) => action.sectionId === "reg-duerp-section");
+    const hasEvidenceAction = this.regulatoryRecommendedActions.some((action) => action.sectionId === "reg-evidence-section");
+
+    if (hasSiteAction && hasDuerpAction && hasEvidenceAction) {
+      return "Les prochaines actions relient directement les sites, le DUERP et les preuves.";
+    }
+    if (hasSiteAction && hasEvidenceAction) {
+      return "Les prochaines actions portent à la fois sur le terrain et sur la preuve.";
+    }
+    return "Chaque action ci-dessous pointe vers un bloc concret du module, sans détour inutile.";
+  }
+
+  get regulatoryProofSupportSummary(): string {
+    const nextEvidenceGap = this.getNextEvidenceGapObligation();
+    if (this.regulatoryEvidenceAvailableCount === 0) {
+      return nextEvidenceGap
+        ? `Commencez par une première pièce simple pour ${nextEvidenceGap.title.toLowerCase()}.`
+        : "Commencez par une première pièce simple pour rendre la conformité démontrable.";
+    }
+
+    if (nextEvidenceGap) {
+      return `${this.regulatoryEvidenceAvailableCount} pièce${this.regulatoryEvidenceAvailableCount > 1 ? "s sont" : " est"} déjà prête${this.regulatoryEvidenceAvailableCount > 1 ? "s" : ""}. La prochaine preuve utile concerne ${nextEvidenceGap.title.toLowerCase()}.`;
+    }
+
+    return this.regulatoryEvidenceAvailableCount > 1
+      ? `${this.regulatoryEvidenceAvailableCount} pièces soutiennent déjà les sujets visibles du module.`
+      : "1 pièce soutient déjà les sujets visibles du module.";
+  }
+
+  get regulatoryShowcaseSummary(): RegulatoryShowcaseSummary {
+    const siteInsight = this.getRegulatorySiteInsight();
+    const priorityCount = this.overdueRegulatoryObligationCount + this.globalBuildingSafetyOverdueCount;
+    const profileIncomplete = this.regulatoryProfile?.profile_status !== "ready" || this.isOnboardingPending;
+    const siteNeedsAttention = siteInsight.tone === "warning" || siteInsight.tone === "progress";
+    const hasAnySite = this.regulatoryAllSites.length > 0;
+    const hasVerification = this.regulatoryObligationsToVerifyCount > 0;
+    const allCompliant = this.regulatoryObligations.length > 0
+      && this.regulatoryObligations.every((obligation) => obligation.status === "compliant");
+
+    let statusLabel = "À compléter";
+    let tone: CfmTone = "progress";
+    let headline = "Le socle réglementaire prend forme.";
+    let summary = "Le module vous aide à cadrer vos obligations, vos sites et vos preuves sans lecture juridique lourde.";
+    let context: string | null = "Commencez par les trois priorités du moment pour faire monter la qualité de conformité rapidement.";
+    let scoreSummary = "Le score combine le profil, les sites, le DUERP, les preuves et les sujets encore ouverts.";
+
+    if (priorityCount > 0) {
+      statusLabel = "Prioritaire";
+      tone = "warning";
+      headline = "Des sujets demandent une action rapide.";
+      summary = "Le copilote détecte des points réglementaires ou bâtiment qui doivent être repris en premier.";
+      context = "Traitez d’abord les sujets prioritaires puis rattachez une preuve simple pour refermer la boucle.";
+      scoreSummary = "Le score reste pénalisé tant que les sujets prioritaires, les contrôles en retard ou les preuves manquantes restent ouverts.";
+    } else if (profileIncomplete || !hasAnySite) {
+      statusLabel = "À compléter";
+      tone = "progress";
+      headline = "La base est en cours de construction.";
+      summary = "Le module a déjà identifié les premiers sujets, mais le socle reste encore trop partiel pour être pleinement fiable.";
+      context = "Commencez par le profil, puis ancrez la lecture sur un site utile et une première preuve.";
+      scoreSummary = "Le score remonte surtout quand le profil, les sites, le DUERP et les premières preuves deviennent exploitables.";
+    } else if (siteNeedsAttention || hasVerification) {
+      statusLabel = "À vérifier";
+      tone = "warning";
+      headline = "La situation est lisible, mais quelques vérifications restent à faire.";
+      summary = "Le périmètre est posé, avec des points encore partiels ou à confirmer avant de pouvoir le considérer comme propre.";
+      context = "Une relance d’enrichissement, une vérification courte ou une preuve ajoutée suffisent souvent à débloquer la suite.";
+      scoreSummary = "Le score reflète un socle déjà exploitable, avec quelques points encore partiels sur les sites, le DUERP ou les preuves.";
+    } else if (allCompliant && this.regulatoryEvidenceAvailableCount > 0) {
+      statusLabel = "Conforme";
+      tone = "success";
+      headline = "La situation réglementaire est bien cadrée.";
+      summary = "Les obligations visibles sont couvertes, les preuves sont présentes et le module devient une base solide de démonstration.";
+      context = "Gardez le rythme sur les contrôles périodiques et les pièces justificatives pour conserver cet état.";
+      scoreSummary = "Le score reflète un socle cohérent, démontrable et crédible pour une démo produit.";
+    }
+
+    return {
+      statusLabel,
+      tone,
+      headline,
+      summary,
+      context,
+      scoreSummary,
+      profileLabel:
+        this.regulatoryProfile?.profile_status === "ready" && !this.isOnboardingPending
+          ? "Profil exploitable"
+          : "Profil à compléter",
+      profileTone:
+        this.regulatoryProfile?.profile_status === "ready" && !this.isOnboardingPending
+          ? "success"
+          : "progress",
+      siteLabel: siteInsight.label,
+      siteTone: siteInsight.tone,
+    };
+  }
+
+  get regulatoryPriorityItems(): RegulatoryShowcasePriorityItem[] {
+    return this.buildRegulatoryPriorityCandidates()
+      .sort((left, right) => left.rank - right.rank || left.title.localeCompare(right.title))
+      .slice(0, 3);
+  }
+
+  get topRegulatoryPriority(): RegulatoryShowcasePriorityItem | null {
+    return this.regulatoryPriorityItems[0] ?? null;
+  }
+
+  get regulatoryFamilyCards(): RegulatoryShowcaseFamilyCard[] {
+    const categories: RegulatoryObligationCategory[] = ["company", "employees", "safety", "buildings"];
+
+    return categories.map((category) => {
+      const obligations = this.regulatoryObligations.filter((obligation) => obligation.category === category);
+      const evidenceCount = this.regulatoryEvidences.filter((evidence) =>
+        obligations.some((obligation) => obligation.id === evidence.obligation_id)
+      ).length;
+      const overdueCount = obligations.filter((obligation) => obligation.status === "overdue").length;
+      const verifyCount = obligations.filter((obligation) => obligation.status === "to_verify").length;
+      const compliantCount = obligations.filter((obligation) => obligation.status === "compliant").length;
+      const referenceObligation = [...obligations].sort(
+        (left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right)
+      )[0] ?? null;
+
+      let statusLabel = "Aucun sujet";
+      let tone: CfmTone = "neutral";
+      let detail = this.getRegulatoryFamilyEmptyDetail(category);
+      let actionLabel = "Compléter le profil";
+      let actionKind: RegulatoryShowcaseActionKind = "scroll";
+      let sectionId = "reg-profile-section";
+      let obligationId: string | null = null;
+      let siteId: string | null = null;
+
+      if (referenceObligation) {
+        const action = this.getRegulatoryObligationAction(referenceObligation, evidenceCount);
+        statusLabel = referenceObligation.status === "overdue"
+          ? "Prioritaire"
+          : this.getComplianceStatusLabel(referenceObligation.status);
+        tone = referenceObligation.status === "overdue"
+          ? "warning"
+          : this.getComplianceStatusTone(referenceObligation.status);
+        actionLabel = action.actionLabel;
+        actionKind = action.actionKind;
+        sectionId = action.sectionId;
+        obligationId = action.obligationId;
+        siteId = action.siteId;
+
+        if (overdueCount > 0) {
+          detail = `${overdueCount} sujet${overdueCount > 1 ? "s" : ""} demande${overdueCount > 1 ? "nt" : ""} une action rapide dans cette famille.`;
+        } else if (verifyCount > 0) {
+          detail = `${verifyCount} point${verifyCount > 1 ? "s" : ""} mérite${verifyCount > 1 ? "nt" : ""} encore une vérification courte.`;
+        } else if (compliantCount === obligations.length) {
+          detail = "La famille est cadrée avec une lecture déjà propre et démontrable.";
+        } else {
+          detail = "La famille avance, avec encore quelques compléments ou preuves à consolider.";
+        }
+      }
+
+      return {
+        id: category,
+        label: this.getRegulatoryFamilyLabel(category),
+        countLabel:
+          obligations.length > 0
+            ? `${obligations.length} sujet${obligations.length > 1 ? "s" : ""}`
+            : "Aucun sujet remonté",
+        detail,
+        statusLabel,
+        tone,
+        highlights: [
+          { label: "À traiter", value: String(overdueCount + verifyCount) },
+          { label: "Conformes", value: String(compliantCount) },
+          { label: "Preuves", value: String(evidenceCount) },
+        ],
+        actionLabel,
+        actionKind,
+        sectionId,
+        obligationId,
+        siteId,
+      };
+    });
+  }
+
+  get regulatoryRecommendedActions(): RegulatoryShowcaseActionItem[] {
+    const actions: RegulatoryShowcaseActionItem[] = [];
+    const allSites = this.regulatoryAllSites;
+    const inferredOnlySites = allSites.filter((site) => !site.declaredSite);
+    const problematicSite = this.getProblematicRegulatorySite();
+    const problematicSiteState = problematicSite ? this.getSiteEnrichmentUiState(problematicSite) : null;
+    const nextEvidenceGap = this.getNextEvidenceGapObligation();
+    const highRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
+    const highestSeverityEntry = this.getHighestPriorityDuerpEntry();
+
+    if (this.regulatoryProfile?.profile_status !== "ready" || this.isOnboardingPending) {
+      actions.push({
+        id: "reg-action-profile",
+        title: "Compléter le profil entreprise",
+        detail: "Le profil pilote les obligations détectées et rend le module plus crédible en démonstration.",
+        supportLabel: "Profil",
+        actionLabel: "Compléter le profil",
+        tone: "progress",
+        actionKind: "scroll",
+        sectionId: "reg-profile-section",
+        obligationId: null,
+        siteId: null,
+      });
+    }
+
+    if (allSites.length === 0) {
+      actions.push({
+        id: "reg-action-first-site",
+        title: "Ajouter un site utile",
+        detail: "Un premier site déclaré rend la lecture réglementaire plus concrète et plus démonstrative.",
+        supportLabel: "Sites",
+        actionLabel: "Ajouter un site",
+        tone: "progress",
+        actionKind: "scroll",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: null,
+      });
+    } else if (inferredOnlySites.length > 0) {
+      actions.push({
+        id: "reg-action-complete-sites",
+        title: "Compléter les sites suivis",
+        detail: `${inferredOnlySites.length} site${inferredOnlySites.length > 1 ? "s apparaissent" : " apparait"} déjà dans le DUERP, la sécurité ou les preuves.`,
+        supportLabel: "Sites",
+        actionLabel: "Vérifier les sites",
+        tone: "progress",
+        actionKind: "scroll",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: null,
+      });
+    }
+
+    if (problematicSite && problematicSiteState) {
+      actions.push({
+        id: `reg-action-site-${problematicSite.id}`,
+        title: `Relancer ${problematicSite.name}`,
+        detail: problematicSiteState.reasonLabel
+          ? `${problematicSiteState.reasonLabel}. Une relance peut clarifier la situation.`
+          : problematicSiteState.detail,
+        supportLabel: "Sites",
+        actionLabel: problematicSiteState.retryLabel,
+        tone: problematicSiteState.tone,
+        actionKind: "site_enrichment",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: problematicSite.id,
+      });
+    }
+
+    if (this.activeDuerpEntries.length > 0 || highRiskWork) {
+      actions.push({
+        id: "reg-action-duerp",
+        title: this.activeDuerpEntries.length > 0 ? "Ouvrir le DUERP actif" : "Commencer le DUERP",
+        detail:
+          this.activeDuerpEntries.length > 0
+            ? `${this.activeDuerpEntries.length} risque${this.activeDuerpEntries.length > 1 ? "s" : ""} suivi${this.activeDuerpEntries.length > 1 ? "s" : ""}${highestSeverityEntry ? `, dont ${highestSeverityEntry.work_unit_name.toLowerCase()}` : ""}.`
+            : "Les interventions à risque méritent au moins un premier risque documenté.",
+        supportLabel: "DUERP",
+        actionLabel: "Ouvrir DUERP",
+        tone: highestSeverityEntry?.severity === "high" ? "warning" : "progress",
+        actionKind: "scroll",
+        sectionId: "reg-duerp-section",
+        obligationId: null,
+        siteId: null,
+      });
+    }
+
+    if (this.globalBuildingSafetyOverdueCount > 0) {
+      actions.push({
+        id: "reg-action-building-safety",
+        title: "Mettre à jour les contrôles bâtiment",
+        detail: "Les contrôles visibles renforcent immédiatement la crédibilité du module Réglementation.",
+        supportLabel: "Sécurité bâtiment",
+        actionLabel: "Voir la sécurité",
+        tone: "warning",
+        actionKind: "scroll",
+        sectionId: "reg-building-safety-section",
+        obligationId: null,
+        siteId: null,
+      });
+    }
+
+    if (nextEvidenceGap) {
+      const hasAnyEvidence = this.regulatoryEvidenceAvailableCount > 0;
+      actions.push({
+        id: `reg-action-evidence-${nextEvidenceGap.id}`,
+        title: hasAnyEvidence ? "Renforcer les preuves utiles" : "Ajouter une première preuve",
+        detail: hasAnyEvidence
+          ? `La prochaine pièce utile concerne ${nextEvidenceGap.title.toLowerCase()}.`
+          : `Commencez par une pièce simple pour ${nextEvidenceGap.title.toLowerCase()}.`,
+        supportLabel: "Preuves",
+        actionLabel: hasAnyEvidence ? "Voir les preuves" : "Ajouter une pièce",
+        tone: hasAnyEvidence ? "calm" : "progress",
+        actionKind: "scroll",
+        sectionId: "reg-evidence-section",
+        obligationId: nextEvidenceGap.id,
+        siteId: null,
+      });
+    }
+
+    return actions
+      .filter((action, index, collection) =>
+        collection.findIndex((item) => this.getRegulatoryShowcaseActionGroupKey(item) === this.getRegulatoryShowcaseActionGroupKey(action)) === index
+      )
+      .slice(0, 4);
+  }
+
+  get regulatoryEvidenceShowcaseItems(): RegulatoryShowcaseEvidenceItem[] {
+    return [...this.regulatoryEvidences]
+      .sort((left, right) => {
+        const rightDate = right.uploaded_at ? Date.parse(right.uploaded_at) : 0;
+        const leftDate = left.uploaded_at ? Date.parse(left.uploaded_at) : 0;
+        return rightDate - leftDate || left.file_name.localeCompare(right.file_name);
+      })
+      .slice(0, 3)
+      .map((evidence) => ({
+        id: evidence.id,
+        title: evidence.link_label,
+        detail: `${evidence.document_type}${evidence.uploaded_at ? ` · ajouté le ${new Date(evidence.uploaded_at).toLocaleDateString("fr-FR")}` : ""}`,
+        statusLabel: this.getDocumentStatusLabel(evidence.status),
+        tone: this.getDocumentStatusTone(evidence.status),
+        contextLabel: evidence.site_id
+          ? this.getSiteNameById(evidence.site_id)
+          : this.getRegulatoryEvidenceLinkKindLabel(evidence.link_kind),
+      }));
+  }
+
   get selectedRegulatoryObligation(): ApplicableRegulatoryObligationRecord | null {
     if (!this.regulatoryProfile || !this.selectedObligationId) {
       return null;
@@ -7463,6 +8750,41 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     );
   }
 
+  getRegulatoryShowcaseActionLabel(action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    actionLabel: string;
+    siteId: string | null;
+  }): string {
+    if (action.actionKind === "site_enrichment" && action.siteId === this.organizationSiteEnrichmentBusyId) {
+      return "Relance en cours";
+    }
+    return action.actionLabel;
+  }
+
+  isRegulatoryShowcaseActionBusy(action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    siteId: string | null;
+  }): boolean {
+    return action.actionKind === "site_enrichment" && action.siteId === this.organizationSiteEnrichmentBusyId;
+  }
+
+  async runRegulatoryShowcaseAction(action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    sectionId: string;
+    obligationId: string | null;
+    siteId: string | null;
+  }): Promise<void> {
+    if (action.actionKind === "site_enrichment" && action.siteId) {
+      const site = this.organizationSites.find((entry) => entry.id === action.siteId);
+      if (site) {
+        await this.relaunchSiteEnrichment(site);
+        return;
+      }
+    }
+
+    this.openRegulatoryWorkspaceTarget(action.sectionId, action.obligationId);
+  }
+
   get canCreateRegulatoryEvidence(): boolean {
     if (!this.regulatoryEvidenceForm.fileName.trim() || !this.regulatoryEvidenceForm.documentType.trim()) {
       return false;
@@ -7478,6 +8800,13 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       case "duerp_entry":
         return Boolean(this.regulatoryEvidenceForm.duerpEntryId);
     }
+  }
+
+  openRegulatoryWorkspaceTarget(sectionId: string, obligationId: string | null = null): void {
+    if (obligationId) {
+      this.selectedObligationId = obligationId;
+    }
+    this.scrollToWorkspaceSection(sectionId);
   }
 
   get buildingSafetyOverdueCount(): number {
@@ -7697,18 +9026,15 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.errorMessage = "";
     this.feedbackMessage = "";
     try {
-      await createOrganizationSite(this.accessToken, this.selectedOrganizationId, {
+      const createdSite = await createOrganizationSite(this.accessToken, this.selectedOrganizationId, {
         name: this.siteForm.name.trim(),
         address: this.siteForm.address.trim(),
         site_type: this.siteForm.siteType
       });
       await this.refreshOrganizationWorkspace();
-      this.siteForm = {
-        name: "",
-        address: "",
-        siteType: "site"
-      };
-      this.feedbackMessage = "Site ajouté.";
+      this.resetSiteForm();
+      this.homeSiteQuickCreateOpen = false;
+      this.feedbackMessage = this.getSiteEnrichmentFeedbackMessage(createdSite, true);
     } catch (error) {
       this.errorMessage = this.toErrorMessage(error, "save");
     } finally {
@@ -8933,6 +10259,48 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     }
   }
 
+  async relaunchSiteEnrichment(site: OrganizationSiteRecord): Promise<void> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return;
+    }
+
+    this.organizationSiteEnrichmentBusyId = site.id;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      const result = await enrichOrganizationSiteLocation(this.accessToken, this.selectedOrganizationId, site.id);
+      this.organizationSites = this.sortSites(
+        this.organizationSites.map((item) => (item.id === result.site.id ? result.site : item))
+      );
+      this.feedbackMessage = this.getSiteEnrichmentFeedbackMessage(result.site);
+    } catch (error) {
+      try {
+        await this.refreshOrganizationWorkspace();
+      } catch {
+        // Keep the primary action feedback readable if workspace refresh also fails.
+      }
+      this.errorMessage = "La relance de l'enrichissement n'a pas abouti. Réessayez dans un instant.";
+    } finally {
+      this.organizationSiteEnrichmentBusyId = null;
+    }
+  }
+
+  openHomeSiteQuickCreate(): void {
+    if (!this.canManageOrganization) {
+      return;
+    }
+
+    this.resetSiteForm();
+    this.homeSiteQuickCreateOpen = true;
+  }
+
+  closeHomeSiteQuickCreate(): void {
+    this.homeSiteQuickCreateOpen = false;
+    if (!this.organizationSiteSaving) {
+      this.resetSiteForm();
+    }
+  }
+
   handleSiteFilterChange(): void {
     if (!this.buildingSafetyEditingId && this.selectedSafetySiteId !== "all") {
       this.buildingSafetyForm.siteId = this.selectedSafetySiteId;
@@ -8982,11 +10350,124 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     }
   }
 
+  getSiteEnrichmentUiState(site: OrganizationSiteRecord): DesktopHomeSiteEnrichmentState {
+    const status = site.location_enrichment_status;
+    switch (status) {
+      case "enriched":
+        return {
+          label: "Enrichissement terminé",
+          tone: "success",
+          detail: "Adresse reconnue et données de localisation prêtes.",
+          reasonLabel: null,
+          retryLabel: "Actualiser",
+          showRetryAsPrimary: false,
+        };
+      case "partial":
+        return {
+          label: "Enrichissement partiel",
+          tone: "progress",
+          detail: "Le site a été enrichi partiellement. Une relance peut compléter les données.",
+          reasonLabel: this.getSiteEnrichmentReasonLabel(site.location_enrichment_last_error_reason),
+          retryLabel: "Relancer l’enrichissement",
+          showRetryAsPrimary: true,
+        };
+      case "no_match":
+        return {
+          label: "Adresse non reconnue",
+          tone: "warning",
+          detail: "L'adresse n'a pas été reconnue automatiquement.",
+          reasonLabel: this.getSiteEnrichmentReasonLabel(site.location_enrichment_last_error_reason),
+          retryLabel: "Réessayer l’enrichissement",
+          showRetryAsPrimary: true,
+        };
+      case "failed":
+        return {
+          label: "Enrichissement indisponible",
+          tone: "warning",
+          detail: "Le service n'a pas pu enrichir ce site pour le moment.",
+          reasonLabel: this.getSiteEnrichmentReasonLabel(site.location_enrichment_last_error_reason),
+          retryLabel: "Réessayer l’enrichissement",
+          showRetryAsPrimary: true,
+        };
+      default:
+        return {
+          label: "Enrichissement non lancé",
+          tone: "neutral",
+          detail: "L'adresse n'a pas encore été vérifiée automatiquement.",
+          reasonLabel: null,
+          retryLabel: "Lancer l’enrichissement",
+          showRetryAsPrimary: false,
+        };
+    }
+  }
+
+  getSiteEnrichmentReasonLabel(
+    reason: OrganizationSiteLocationEnrichmentErrorReason | null | undefined
+  ): string | null {
+    switch (reason) {
+      case "no_geocode_match":
+        return "Adresse introuvable";
+      case "ambiguous_address":
+        return "Adresse ambiguë";
+      case "risk_provider_unavailable":
+        return "Risques temporairement indisponibles";
+      case "provider_unavailable":
+        return "Service temporairement indisponible";
+      case "provider_response_invalid":
+        return "Réponse externe invalide";
+      default:
+        return null;
+    }
+  }
+
+  getSiteEnrichmentFeedbackMessage(site: OrganizationSiteRecord, created = false): string {
+    const prefix = created ? "Site ajouté." : "Enrichissement relancé.";
+    switch (site.location_enrichment_status) {
+      case "enriched":
+        return created ? "Site ajouté et enrichi." : "Enrichissement du site terminé.";
+      case "partial":
+        return `${prefix} Enrichissement partiel.`;
+      case "no_match":
+        return `${prefix} Adresse non reconnue.`;
+      case "failed":
+        return `${prefix} Enrichissement indisponible pour le moment.`;
+      default:
+        return created ? "Site ajouté." : "Relance enregistrée.";
+    }
+  }
+
   getSiteNameById(siteId: string | null): string {
     if (!siteId) {
       return "Entreprise";
     }
-    return this.organizationSites.find((site) => site.id === siteId)?.name ?? "Site";
+    return this.regulatoryAllSites.find((site) => site.siteId === siteId)?.name ?? "Site";
+  }
+
+  getRegulatoryAllSiteSourceLabel(site: RegulatoryAllSiteItem): string {
+    const sourceLabels = site.sourceKinds
+      .filter((kind) => kind !== "declared")
+      .map((kind) => this.getRegulatorySiteSourceKindLabel(kind));
+    return sourceLabels.length > 0 ? sourceLabels.join(" · ") : "Site déclaré";
+  }
+
+  getRegulatoryAllSiteDetail(site: RegulatoryAllSiteItem): string {
+    const sourceLabels = site.sourceKinds
+      .filter((kind) => kind !== "declared")
+      .map((kind) => this.getRegulatorySiteSourceKindLabel(kind));
+
+    if (site.declaredSite && sourceLabels.length === 0) {
+      return "Site déjà exploitable dans le module.";
+    }
+
+    if (site.declaredSite && sourceLabels.length > 0) {
+      return `Site utilisé dans ${sourceLabels.join(", ")}.`;
+    }
+
+    if (sourceLabels.length === 0) {
+      return "Site repéré dans le module. Complétez-le pour fiabiliser l’adresse et l’enrichissement.";
+    }
+
+    return `Site repéré via ${sourceLabels.join(", ")}. Complétez-le pour fiabiliser l’adresse et l’enrichissement.`;
   }
 
   getBillingWorksiteNameById(worksiteId: string | null): string {
@@ -9502,6 +10983,19 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     return `${count} obligation${count > 1 ? "s" : ""} détectée${count > 1 ? "s" : ""}`;
   }
 
+  getRegulatoryFamilyLabel(category: RegulatoryObligationCategory): string {
+    switch (category) {
+      case "company":
+        return "Documents obligatoires";
+      case "employees":
+        return "Salariés / organisation";
+      case "safety":
+        return "Sécurité / prévention";
+      case "buildings":
+        return "Sites / conformité visible";
+    }
+  }
+
   openObligationDetail(obligationId: string): void {
     this.selectedObligationId = obligationId;
   }
@@ -9664,6 +11158,463 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return value > 0 ? "success" : "neutral";
     }
     return value ? "success" : "neutral";
+  }
+
+  private getRegulatoryBooleanCriterion(code: string): boolean | null {
+    const criterion = this.regulatoryProfile?.criteria.find((entry) => entry.code === code);
+    return typeof criterion?.value === "boolean" ? criterion.value : null;
+  }
+
+  private getRegulatorySiteDedupKey(siteId: string | null, name: string | null, address: string | null): string {
+    if (siteId) {
+      return `id:${siteId}`;
+    }
+
+    const normalizedName = (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    const normalizedAddress = (address ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+    return `fallback:${normalizedName}|${normalizedAddress}`;
+  }
+
+  private getRegulatorySiteSourceKindLabel(kind: RegulatoryAllSiteSourceKind): string {
+    switch (kind) {
+      case "declared":
+        return "site";
+      case "duerp":
+        return "DUERP";
+      case "building_safety":
+        return "sécurité bâtiment";
+      case "evidence":
+        return "preuves";
+    }
+  }
+
+  private getProblematicRegulatorySite(): OrganizationSiteRecord | null {
+    return this.activeOrganizationSites.find((site) =>
+      site.location_enrichment_status === "failed" || site.location_enrichment_status === "no_match"
+    )
+      ?? this.activeOrganizationSites.find((site) => site.location_enrichment_status === "partial")
+      ?? this.activeOrganizationSites.find((site) => site.location_enrichment_status == null)
+      ?? null;
+  }
+
+  private getHighestPriorityDuerpEntry(): DuerpEntryRecord | null {
+    return [...this.activeDuerpEntries]
+      .sort((left, right) => {
+        const leftRank = left.severity === "high" ? 0 : left.severity === "medium" ? 1 : 2;
+        const rightRank = right.severity === "high" ? 0 : right.severity === "medium" ? 1 : 2;
+        return leftRank - rightRank || left.work_unit_name.localeCompare(right.work_unit_name);
+      })[0] ?? null;
+  }
+
+  private getNextEvidenceGapObligation(): ApplicableRegulatoryObligationRecord | null {
+    const sortedObligations = [...this.regulatoryObligations].sort(
+      (left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right)
+    );
+
+    return sortedObligations.find((obligation) => {
+      const evidenceCount = this.regulatoryEvidences.filter(
+        (evidence) => evidence.status === "available" && evidence.obligation_id === obligation.id
+      ).length;
+      return evidenceCount === 0 && obligation.status !== "compliant";
+    })
+      ?? sortedObligations.find((obligation) =>
+        this.regulatoryEvidences.every(
+          (evidence) => evidence.status !== "available" || evidence.obligation_id !== obligation.id
+        )
+      )
+      ?? null;
+  }
+
+  private getRegulatoryObligationAction(
+    obligation: ApplicableRegulatoryObligationRecord,
+    evidenceCount: number
+  ): {
+    actionLabel: string;
+    actionKind: RegulatoryShowcaseActionKind;
+    sectionId: string;
+    obligationId: string | null;
+    siteId: string | null;
+  } {
+    switch (obligation.id) {
+      case "reg-employees-register":
+        if (this.regulatoryProfile?.profile_status !== "ready" || this.isOnboardingPending) {
+          return {
+            actionLabel: "Compléter le profil",
+            actionKind: "scroll",
+            sectionId: "reg-profile-section",
+            obligationId: null,
+            siteId: null,
+          };
+        }
+        break;
+      case "reg-employees-safety-organization":
+        return {
+          actionLabel: "Ouvrir DUERP",
+          actionKind: "scroll",
+          sectionId: "reg-duerp-section",
+          obligationId: null,
+          siteId: null,
+        };
+      case "reg-sites-emergency-contacts":
+        return {
+          actionLabel: evidenceCount > 0 ? "Voir les preuves" : "Ajouter une preuve",
+          actionKind: "scroll",
+          sectionId: "reg-evidence-section",
+          obligationId: obligation.id,
+          siteId: null,
+        };
+      case "reg-buildings-periodic-checks":
+        return {
+          actionLabel: "Voir la sécurité",
+          actionKind: "scroll",
+          sectionId: "reg-building-safety-section",
+          obligationId: null,
+          siteId: null,
+        };
+      case "reg-warehouse-storage-rules":
+        return {
+          actionLabel:
+            this.regulatoryAllSites.length === 0
+              ? "Ajouter un site"
+              : this.activeOrganizationSites.length > 0
+                ? "Vérifier un site"
+                : "Compléter les sites",
+          actionKind: "scroll",
+          sectionId: "reg-sites-section",
+          obligationId: null,
+          siteId: null,
+        };
+    }
+
+    return {
+      actionLabel: "Ouvrir l’obligation",
+      actionKind: "scroll",
+      sectionId: "reg-obligations-section",
+      obligationId: obligation.id,
+      siteId: null,
+    };
+  }
+
+  private getRegulatoryShowcaseActionGroupKey(action: {
+    actionKind: RegulatoryShowcaseActionKind;
+    sectionId: string;
+    siteId: string | null;
+  }): string {
+    return action.actionKind === "site_enrichment"
+      ? `site:${action.siteId ?? "missing"}`
+      : `scroll:${action.sectionId}`;
+  }
+
+  private buildRegulatoryPriorityCandidates(): RegulatoryShowcasePriorityItem[] {
+    const candidates: RegulatoryShowcasePriorityItem[] = [];
+    const missingProfileItems = this.regulatoryProfile?.missing_profile_items ?? [];
+    const allSites = this.regulatoryAllSites;
+    const inferredOnlySites = allSites.filter((site) => !site.declaredSite);
+    const problematicSite = this.getProblematicRegulatorySite();
+    const problematicSiteState = problematicSite ? this.getSiteEnrichmentUiState(problematicSite) : null;
+    const highestSeverityEntry = this.getHighestPriorityDuerpEntry();
+    const highRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
+
+    if (this.isOnboardingPending || missingProfileItems.length > 0) {
+      const missingLabel = missingProfileItems.length > 0
+        ? missingProfileItems.slice(0, 2).join(", ")
+        : "les informations essentielles";
+      candidates.push({
+        id: "priority-profile",
+        title: "Compléter le profil entreprise",
+        familyLabel: "Profil",
+        levelLabel: "À compléter",
+        tone: "progress",
+        impact: `Il manque encore ${missingLabel} pour fiabiliser le périmètre réglementaire.`,
+        context: "Le profil reste la base du copilote de conformité.",
+        focusLabel: null,
+        actionLabel: "Compléter le profil",
+        actionKind: "scroll",
+        sectionId: "reg-profile-section",
+        obligationId: null,
+        siteId: null,
+        rank: 18,
+      });
+    }
+
+    if (allSites.length === 0) {
+      candidates.push({
+        id: "priority-first-site",
+        title: "Déclarer un premier site",
+        familyLabel: "Sites",
+        levelLabel: "À compléter",
+        tone: "progress",
+        impact: "Sans site déclaré, la lecture réglementaire reste plus générale et moins démonstrative.",
+        context: "Un site reconnu rend tout de suite le module plus concret.",
+        focusLabel: null,
+        actionLabel: "Ajouter un site",
+        actionKind: "scroll",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: null,
+        rank: 26,
+      });
+    } else if (inferredOnlySites.length > 0) {
+      candidates.push({
+        id: "priority-sites-to-consolidate",
+        title: "Compléter les sites suivis",
+        familyLabel: "Sites",
+        levelLabel: "À vérifier",
+        tone: "progress",
+        impact: `${inferredOnlySites.length} site${inferredOnlySites.length > 1 ? "s apparaissent" : " apparait"} déjà dans le DUERP, la sécurité ou les preuves.`,
+        context: "Fiabiliser ces sites supprime les contradictions visibles du module.",
+        focusLabel: inferredOnlySites[0]?.name ?? null,
+        actionLabel: "Vérifier les sites",
+        actionKind: "scroll",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: null,
+        rank: 22,
+      });
+    }
+
+    if (problematicSite && problematicSiteState) {
+      const status = problematicSite.location_enrichment_status;
+      candidates.push({
+        id: `priority-site-${problematicSite.id}`,
+        title: `Fiabiliser ${problematicSite.name}`,
+        familyLabel: "Sites",
+        levelLabel:
+          status === "failed" || status === "no_match"
+            ? "À vérifier"
+            : "À compléter",
+        tone:
+          status === "failed" || status === "no_match"
+            ? "warning"
+            : "progress",
+        impact:
+          status === "failed"
+            ? `${problematicSite.name} n'a pas pu être enrichi pour le moment.`
+            : status === "no_match"
+              ? `${problematicSite.name} n'a pas encore d'adresse reconnue automatiquement.`
+              : status === "partial"
+                ? `${problematicSite.name} reste enrichi partiellement.`
+                : `${problematicSite.name} n'a pas encore été vérifié automatiquement.`,
+        context: problematicSiteState.reasonLabel
+          ?? "Les sites fiables renforcent la lecture réglementaire par adresse et bâtiment.",
+        focusLabel: problematicSite.name,
+        actionLabel: problematicSiteState.retryLabel,
+        actionKind: "site_enrichment",
+        sectionId: "reg-sites-section",
+        obligationId: null,
+        siteId: problematicSite.id,
+        rank:
+          status === "failed"
+            ? 12
+            : status === "no_match"
+              ? 14
+              : status === "partial"
+                ? 20
+                : 28,
+      });
+    }
+
+    if (this.globalBuildingSafetyOverdueCount > 0) {
+      candidates.push({
+        id: "priority-building-safety",
+        title: "Traiter les contrôles bâtiment en retard",
+        familyLabel: "Sécurité / prévention",
+        levelLabel: "Prioritaire",
+        tone: "warning",
+        impact: `${this.globalBuildingSafetyOverdueCount} contrôle${this.globalBuildingSafetyOverdueCount > 1 ? "s" : ""} demande${this.globalBuildingSafetyOverdueCount > 1 ? "nt" : ""} une action rapide.`,
+        context: "Ces contrôles sont très démonstratifs dans une revue de conformité.",
+        focusLabel:
+          this.buildingSafetyItems.find((item) => item.alert_status === "overdue")?.name
+          ?? null,
+        actionLabel: "Voir la sécurité",
+        actionKind: "scroll",
+        sectionId: "reg-building-safety-section",
+        obligationId: null,
+        siteId: null,
+        rank: 6,
+      });
+    }
+
+    if (this.activeDuerpEntries.length > 0 || highRiskWork) {
+      candidates.push({
+        id: "priority-duerp",
+        title: this.activeDuerpEntries.length > 0 ? "Reprendre le DUERP actif" : "Ouvrir le DUERP",
+        familyLabel: "Sécurité / prévention",
+        levelLabel:
+          this.activeDuerpEntries.length === 0
+            ? "À compléter"
+            : highestSeverityEntry?.severity === "high"
+              ? "À vérifier"
+              : "En cours",
+        tone:
+          this.activeDuerpEntries.length === 0
+            ? "progress"
+            : highestSeverityEntry?.severity === "high"
+              ? "warning"
+              : "progress",
+        impact:
+          this.activeDuerpEntries.length === 0
+            ? "Les interventions à risque méritent au moins un premier risque documenté."
+            : `${this.activeDuerpEntries.length} risque${this.activeDuerpEntries.length > 1 ? "s" : ""} actif${this.activeDuerpEntries.length > 1 ? "s" : ""} reste${this.activeDuerpEntries.length > 1 ? "nt" : ""} à consolider.`,
+        context: highestSeverityEntry
+          ? `${highestSeverityEntry.work_unit_name} · ${highestSeverityEntry.risk_label}`
+          : "Le DUERP relie déjà la conformité aux sites, à la prévention et aux preuves terrain.",
+        focusLabel: highestSeverityEntry?.site_id ? this.getSiteNameById(highestSeverityEntry.site_id) : "DUERP",
+        actionLabel: "Ouvrir DUERP",
+        actionKind: "scroll",
+        sectionId: "reg-duerp-section",
+        obligationId: null,
+        siteId: null,
+        rank: this.activeDuerpEntries.length === 0 ? 24 : highestSeverityEntry?.severity === "high" ? 18 : 26,
+      });
+    }
+
+    const occupiedTargets = new Set(
+      candidates.map((candidate) => this.getRegulatoryShowcaseActionGroupKey(candidate))
+    );
+
+    for (const obligation of this.regulatoryObligations.slice().sort(
+      (left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right)
+    )) {
+      const evidenceCount = this.regulatoryEvidences.filter((evidence) => evidence.obligation_id === obligation.id).length;
+      const action = this.getRegulatoryObligationAction(obligation, evidenceCount);
+      if (occupiedTargets.has(this.getRegulatoryShowcaseActionGroupKey(action))) {
+        continue;
+      }
+      occupiedTargets.add(this.getRegulatoryShowcaseActionGroupKey(action));
+      candidates.push({
+        id: `priority-obligation-${obligation.id}`,
+        title: obligation.title,
+        familyLabel: this.getRegulatoryFamilyLabel(obligation.category),
+        levelLabel:
+          obligation.status === "overdue"
+            ? "Prioritaire"
+            : this.getComplianceStatusLabel(obligation.status),
+        tone:
+          obligation.status === "overdue"
+            ? "warning"
+            : this.getComplianceStatusTone(obligation.status),
+        impact: obligation.reason_summary,
+        context: this.getObligationFirstAction(obligation, evidenceCount),
+        focusLabel: null,
+        actionLabel: action.actionLabel,
+        actionKind: action.actionKind,
+        sectionId: action.sectionId,
+        obligationId: action.obligationId,
+        siteId: action.siteId,
+        rank: this.getRegulatoryObligationRank(obligation),
+      });
+    }
+
+    return candidates;
+  }
+
+  private getRegulatoryFamilyEmptyDetail(category: RegulatoryObligationCategory): string {
+    switch (category) {
+      case "company":
+        return "Cette famille se précisera dès que le profil entreprise sera mieux cadré.";
+      case "employees":
+        return "Les sujets salariés apparaitront ici dès que le profil d’entreprise les rendra pertinents.";
+      case "safety":
+        return "Les sujets prévention remonteront ici avec les premiers repères sécurité et DUERP.";
+      case "buildings":
+        return "Les sujets liés aux sites et bâtiments gagneront en précision avec des sites enrichis et suivis.";
+    }
+  }
+
+  private getRegulatorySiteInsight(): { label: string | null; tone: CfmTone } {
+    const allSites = this.regulatoryAllSites;
+    const activeSites = this.activeOrganizationSites;
+    if (allSites.length === 0) {
+      return { label: "Aucun site déclaré", tone: "neutral" };
+    }
+
+    const failedOrNoMatchCount = activeSites.filter((site) =>
+      site.location_enrichment_status === "failed" || site.location_enrichment_status === "no_match"
+    ).length;
+    if (failedOrNoMatchCount > 0) {
+      return {
+        label: `${failedOrNoMatchCount} site${failedOrNoMatchCount > 1 ? "s" : ""} à vérifier`,
+        tone: "warning",
+      };
+    }
+
+    const partialCount = activeSites.filter((site) => site.location_enrichment_status === "partial").length;
+    if (partialCount > 0) {
+      return {
+        label: `${partialCount} site${partialCount > 1 ? "s" : ""} à compléter`,
+        tone: "progress",
+      };
+    }
+
+    if (activeSites.length === 0) {
+      return {
+        label: `${allSites.length} site${allSites.length > 1 ? "s suivis" : " suivi"}`,
+        tone: "calm",
+      };
+    }
+
+    const enrichedCount = activeSites.filter((site) => site.location_enrichment_status === "enriched").length;
+    if (enrichedCount > 0) {
+      return {
+        label:
+          enrichedCount === activeSites.length
+            ? `${allSites.length} site${allSites.length > 1 ? "s prêts" : " prêt"}`
+            : `${enrichedCount} site${enrichedCount > 1 ? "s" : ""} prêt${enrichedCount > 1 ? "s" : ""}`,
+        tone: "success",
+      };
+    }
+
+    return {
+      label: `${allSites.length} site${allSites.length > 1 ? "s" : ""} à vérifier`,
+      tone: "progress",
+    };
+  }
+
+  private getRegulatoryObligationRank(obligation: ApplicableRegulatoryObligationRecord): number {
+    const statusRank = (() => {
+      switch (obligation.status) {
+        case "overdue":
+          return 0;
+        case "to_verify":
+          return 10;
+        case "to_complete":
+          return 20;
+        case "in_progress":
+          return 30;
+        case "compliant":
+          return 40;
+      }
+    })();
+
+    const priorityRank = (() => {
+      switch (obligation.priority) {
+        case "high":
+          return 0;
+        case "medium":
+          return 2;
+        case "low":
+          return 4;
+      }
+    })();
+
+    return statusRank + priorityRank;
+  }
+
+  private scrollToWorkspaceSection(sectionId: string): void {
+    const executeScroll = () => {
+      globalThis.document?.getElementById(sectionId)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    };
+
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      globalThis.requestAnimationFrame(executeScroll);
+      return;
+    }
+
+    globalThis.setTimeout(executeScroll, 0);
   }
 
   private async refreshSession(organizationId?: string | null): Promise<void> {
@@ -10215,6 +12166,14 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       }
       return left.name.localeCompare(right.name);
     });
+  }
+
+  private resetSiteForm(): void {
+    this.siteForm = {
+      name: "",
+      address: "",
+      siteType: "site"
+    };
   }
 
   private normalizeOptionalText(value: string): string | null {
