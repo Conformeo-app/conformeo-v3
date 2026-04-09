@@ -10,6 +10,7 @@ from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
 
 if TYPE_CHECKING:
     from app.db.models.organization import Organization
+    from app.db.models.organization_team import OrganizationTeam
     from app.db.models.user import User
 
 
@@ -33,6 +34,11 @@ class WorksiteCoordinationItem(Base, IdentifiedModel, AuditModel, VersionedModel
     )
     target_type: Mapped[str] = mapped_column(String(32), nullable=False)
     target_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    team_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("organization_teams.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     assignee_user_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -47,4 +53,5 @@ class WorksiteCoordinationItem(Base, IdentifiedModel, AuditModel, VersionedModel
     comment_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     organization: Mapped["Organization"] = relationship()
+    team: Mapped["OrganizationTeam | None"] = relationship()
     assignee_user: Mapped["User | None"] = relationship()

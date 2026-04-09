@@ -1,6 +1,7 @@
 export type CfmTone =
   | "neutral"
   | "calm"
+  | "accent"
   | "progress"
   | "success"
   | "warning"

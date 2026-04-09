@@ -29,7 +29,6 @@ import {
 } from "@conformeo/ui";
 import {
   IonApp,
-  IonBadge,
   IonButton,
   IonContent,
   IonHeader,
@@ -71,6 +70,7 @@ import {
   type QuickCapturePattern,
   type QuickCapturePatternKey
 } from "./quick-capture-pattern";
+import { MobileActionShellComponent } from "./mobile-action-shell.component";
 
 @Component({
   selector: "cfm-root",
@@ -79,7 +79,6 @@ import {
     CommonModule,
     FormsModule,
     IonApp,
-    IonBadge,
     IonButton,
     IonContent,
     IonHeader,
@@ -90,7 +89,8 @@ import {
     CfmEmptyStateComponent,
     CfmInputComponent,
     CfmStatusChipComponent,
-    CfmSyncStateComponent
+    CfmSyncStateComponent,
+    MobileActionShellComponent
   ],
   template: `
     <ion-app>
@@ -101,16 +101,26 @@ import {
       </ion-header>
 
       <ion-content fullscreen="true">
-        <section class="shell">
-          <ion-badge color="success">Sprint 1</ion-badge>
-          <h1>Chantiers terrain et préparation hors ligne</h1>
-          <p>
-            Cette surface Ionic garde le socle Sprint 0 en place et ouvre un premier bloc Chantier
-            simple sur mobile : voir ses chantiers, ouvrir une fiche essentielle et préparer un chantier
-            pour le hors ligne.
-          </p>
+        <cfm-mobile-action-shell
+          kicker="Terrain"
+          title="Conformeo mobile"
+          summary="Capture directe, chantiers lisibles et synchronisation claire dans un cadre terrain plus calme."
+        >
+          <div cfmMobileHeroMeta class="mobile-hero-meta">
+            <cfm-status-chip
+              [label]="isDeviceOnline ? 'Appareil connecté' : 'Mode hors ligne'"
+              [tone]="isDeviceOnline ? 'success' : 'warning'"
+            />
+            <cfm-status-chip
+              [label]="session ? 'Session active' : 'Connexion requise'"
+              [tone]="session ? 'progress' : 'neutral'"
+            />
+          </div>
+
+          <section class="shell">
 
           <cfm-card
+            id="mobile-capture"
             class="section-card"
             eyebrow="Pattern UX"
             title="Capture rapide terrain"
@@ -450,6 +460,7 @@ import {
           </cfm-card>
 
           <cfm-card
+            id="mobile-session"
             *ngIf="!session; else mobileSessionTemplate"
             class="section-card"
             eyebrow="Connexion mobile"
@@ -485,6 +496,7 @@ import {
 
           <ng-template #mobileSessionTemplate>
             <cfm-card
+              id="mobile-session"
               *ngIf="currentMembership as membership"
               class="section-card"
               eyebrow="Contexte d'organisation"
@@ -530,6 +542,7 @@ import {
             </cfm-card>
 
             <cfm-card
+              id="mobile-worksites"
               *ngIf="currentMembership"
               class="section-card"
               eyebrow="Chantier"
@@ -1283,46 +1296,51 @@ import {
           </ng-template>
 
           <p class="feedback error" *ngIf="errorMessage">{{ errorMessage }}</p>
-        </section>
+          </section>
+
+          <nav cfmMobileDock class="mobile-dock-links" aria-label="Navigation terrain">
+            <a class="mobile-dock-link" href="#mobile-capture">Capture</a>
+            <a class="mobile-dock-link" href="#mobile-session">Contexte</a>
+            <a class="mobile-dock-link" href="#mobile-worksites">Chantiers</a>
+          </nav>
+        </cfm-mobile-action-shell>
       </ion-content>
     </ion-app>
   `,
   styles: [
     `
+      .mobile-hero-meta,
+      .mobile-dock-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+      }
+
+      .mobile-dock-links {
+        justify-content: space-between;
+      }
+
+      .mobile-dock-link {
+        flex: 1 1 0;
+        min-width: 0;
+        text-align: center;
+        text-decoration: none;
+        padding: 0.72rem 0.85rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--cfm-color-primary);
+        font-weight: 500;
+      }
+
       .shell {
         min-height: 100%;
-        padding: calc(2rem + env(safe-area-inset-top)) 1rem 2rem;
-        background:
-          radial-gradient(circle at top, rgba(88, 165, 149, 0.24), transparent 34%),
-          radial-gradient(circle at top right, rgba(245, 188, 88, 0.18), transparent 24%),
-          linear-gradient(180deg, #f7f2e9, #edf5f2);
+        padding: 0 0 1rem;
       }
 
       .auth-form,
       .organization-switch,
       .draft-form {
         display: grid;
-      }
-
-      ion-badge {
-        margin-bottom: 1rem;
-      }
-
-      h1,
-      p {
-        margin: 0;
-      }
-
-      h1 {
-        font-size: 2rem;
-        line-height: 1.05;
-        color: #10312f;
-      }
-
-      p {
-        margin-top: 0.85rem;
-        line-height: 1.6;
-        color: #325a56;
       }
 
       .supporting-copy {

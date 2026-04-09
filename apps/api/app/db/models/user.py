@@ -12,6 +12,7 @@ from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
 if TYPE_CHECKING:
     from app.db.models.document import Document
     from app.db.models.organization_membership import OrganizationMembership
+    from app.db.models.organization_team import OrganizationTeamMember
 
 
 class UserStatus(str, enum.Enum):
@@ -37,6 +38,10 @@ class User(Base, IdentifiedModel, AuditModel, VersionedModel):
     )
     last_active_at: Mapped[datetime | None] = mapped_column(nullable=True)
     memberships: Mapped[list["OrganizationMembership"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    team_memberships: Mapped[list["OrganizationTeamMember"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

@@ -17,9 +17,22 @@ from app.db.models.organization_site import (
     OrganizationSiteType,
 )
 from app.db.models.organization_membership import OrganizationMembership
+from app.db.models.organization_team import OrganizationTeam, OrganizationTeamMember
 from app.db.models.quote import Quote, QuoteStatus
 from app.db.models.user import User, UserStatus
 from app.db.models.worksite_coordination import WorksiteCoordinationItem
+from app.db.models.worksite import (
+    Worksite,
+    WorksiteEquipment,
+    WorksiteEquipmentMovement,
+    WorksiteEquipmentMovementType,
+    WorksiteEquipmentStatus,
+    WorksiteIntervention,
+    WorksiteInterventionResult,
+    WorksiteInterventionStatus,
+    WorksiteInterventionType,
+    WorksiteStatus,
+)
 
 __all__ = [
     "AuditAction",
@@ -41,6 +54,8 @@ __all__ = [
     "OrganizationModuleCode",
     "Organization",
     "OrganizationMembership",
+    "OrganizationTeam",
+    "OrganizationTeamMember",
     "OrganizationSite",
     "OrganizationSiteStatus",
     "OrganizationSiteType",
@@ -49,5 +64,15 @@ __all__ = [
     "QuoteStatus",
     "User",
     "UserStatus",
+    "Worksite",
+    "WorksiteEquipment",
+    "WorksiteEquipmentMovement",
+    "WorksiteEquipmentMovementType",
+    "WorksiteEquipmentStatus",
+    "WorksiteIntervention",
+    "WorksiteInterventionResult",
+    "WorksiteInterventionStatus",
+    "WorksiteInterventionType",
     "WorksiteCoordinationItem",
+    "WorksiteStatus",
 ]

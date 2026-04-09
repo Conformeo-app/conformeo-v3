@@ -13,6 +13,7 @@ from app.db.models.base import AuditModel, Base, IdentifiedModel, VersionedModel
 if TYPE_CHECKING:
     from app.db.models.building_safety_item import BuildingSafetyItem
     from app.db.models.organization import Organization
+    from app.db.models.worksite import Worksite
 
 
 class OrganizationSiteType(str, enum.Enum):
@@ -68,4 +69,7 @@ class OrganizationSite(Base, IdentifiedModel, AuditModel, VersionedModel):
     building_safety_items: Mapped[list["BuildingSafetyItem"]] = relationship(
         back_populates="site",
         cascade="all, delete-orphan",
+    )
+    worksites: Mapped[list["Worksite"]] = relationship(
+        back_populates="site",
     )

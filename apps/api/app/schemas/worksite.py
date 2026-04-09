@@ -12,13 +12,29 @@ from app.schemas.common import BaseReadModel
 class WorksiteSummaryRead(BaseModel):
     id: UUID
     organization_id: UUID
+    is_persisted: bool
     name: str
     client_name: str
     address: str
     status: str
     planned_for: datetime | None
     updated_at: datetime
+    description: str | None = None
+    site_id: UUID | None = None
+    site_name: str | None = None
     coordination: "WorksiteCoordinationRead"
+    interventions: list["WorksiteInterventionRead"]
+
+
+class WorksiteCreateRequest(BaseModel):
+    name: str
+    site_id: UUID | None = None
+    status: Literal["planned", "in_progress", "blocked", "completed"] = "planned"
+    description: str | None = None
+
+
+class WorksiteStatusUpdateRequest(BaseModel):
+    status: Literal["planned", "in_progress", "blocked", "completed"]
 
 
 class WorksiteAssigneeRead(BaseModel):
@@ -27,10 +43,129 @@ class WorksiteAssigneeRead(BaseModel):
     role_code: str
 
 
+class WorksiteTeamMemberRead(BaseModel):
+    user_id: UUID
+    display_name: str
+    role_code: str
+    role_label: str
+
+
+class WorksiteTeamRead(BaseModel):
+    id: UUID
+    name: str
+    description: str | None
+    member_count: int
+    members: list[WorksiteTeamMemberRead]
+
+
+class WorksiteTeamMemberAddRequest(BaseModel):
+    user_id: UUID
+
+
+class WorksiteInterventionRead(BaseReadModel):
+    organization_id: UUID
+    worksite_id: UUID
+    intervention_type: Literal[
+        "preparation",
+        "visit",
+        "team_intervention",
+        "delivery",
+        "verification",
+        "handover",
+    ]
+    status: Literal["to_schedule", "planned", "done", "canceled"]
+    scheduled_for: datetime | None
+    completed_at: datetime | None
+    result: Literal["completed", "partial", "blocked", "postponed"] | None = None
+    team_id: UUID | None = None
+    team_name: str | None = None
+    assignee_user_id: UUID | None = None
+    assignee_display_name: str | None = None
+    notes: str | None = None
+    report_comment: str | None = None
+    follow_up_note: str | None = None
+
+
+class WorksiteInterventionCreateRequest(BaseModel):
+    intervention_type: Literal[
+        "preparation",
+        "visit",
+        "team_intervention",
+        "delivery",
+        "verification",
+        "handover",
+    ]
+    status: Literal["to_schedule", "planned", "done", "canceled"] = "to_schedule"
+    scheduled_for: datetime | None = None
+    completed_at: datetime | None = None
+    result: Literal["completed", "partial", "blocked", "postponed"] | None = None
+    team_id: UUID | None = None
+    assignee_user_id: UUID | None = None
+    notes: str | None = None
+    report_comment: str | None = None
+    follow_up_note: str | None = None
+
+
+class WorksiteInterventionUpdateRequest(BaseModel):
+    intervention_type: Literal[
+        "preparation",
+        "visit",
+        "team_intervention",
+        "delivery",
+        "verification",
+        "handover",
+    ] | None = None
+    status: Literal["to_schedule", "planned", "done", "canceled"] | None = None
+    scheduled_for: datetime | None = None
+    completed_at: datetime | None = None
+    result: Literal["completed", "partial", "blocked", "postponed"] | None = None
+    team_id: UUID | None = None
+    assignee_user_id: UUID | None = None
+    notes: str | None = None
+    report_comment: str | None = None
+    follow_up_note: str | None = None
+
+
+class WorksiteEquipmentRead(BaseReadModel):
+    organization_id: UUID
+    worksite_id: UUID | None
+    worksite_name: str | None
+    name: str
+    type: str
+    status: Literal["ready", "attention", "unavailable"]
+
+
+class WorksiteEquipmentCreateRequest(BaseModel):
+    name: str
+    type: str
+    status: Literal["ready", "attention", "unavailable"] = "ready"
+
+
+class WorksiteEquipmentMovementRead(BaseReadModel):
+    organization_id: UUID
+    worksite_id: UUID
+    equipment_id: UUID
+    equipment_name: str
+    movement_type: Literal["assigned_to_worksite", "removed_from_worksite", "marked_damaged"]
+    resulting_status: Literal["ready", "attention", "unavailable"]
+    captured_at: datetime | None
+    actor_user_id: UUID | None
+    actor_display_name: str | None
+    sync_status: Literal["local_only", "pending_sync", "synced"]
+
+
+class WorksiteEquipmentMovementCreateRequest(BaseModel):
+    equipment_id: UUID
+    movement_type: Literal["assigned_to_worksite", "removed_from_worksite", "marked_damaged"]
+    resulting_status: Literal["ready", "attention", "unavailable"] = "ready"
+
+
 class WorksiteCoordinationRead(BaseModel):
     target_type: Literal["worksite", "worksite_document"]
     target_id: UUID
     status: Literal["todo", "in_progress", "done"]
+    team_id: UUID | None = None
+    team_name: str | None = None
     assignee_user_id: UUID | None
     assignee_display_name: str | None
     comment_text: str | None
@@ -39,6 +174,7 @@ class WorksiteCoordinationRead(BaseModel):
 
 class WorksiteCoordinationUpdateRequest(BaseModel):
     status: Literal["todo", "in_progress", "done"]
+    team_id: UUID | None = None
     assignee_user_id: UUID | None = None
     comment_text: str | None = None
 

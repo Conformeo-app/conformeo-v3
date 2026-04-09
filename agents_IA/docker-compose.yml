@@ -1,0 +1,120 @@
+volumes:
+  postgres_data:
+  redis_data:
+  weaviate_data:
+  n8n_data:
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: dify-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: dify
+      POSTGRES_USER: dify
+      POSTGRES_PASSWORD: dify_local_2026
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dify -d dify"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: dify-redis
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  weaviate:
+    image: semitechnologies/weaviate:1.25.9
+    container_name: dify-weaviate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8085:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: text2vec-transformers
+      ENABLE_MODULES: text2vec-transformers
+      CLUSTER_HOSTNAME: 'node1'
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
+
+  dify-api:
+    image: langgenius/dify-api:latest
+    container_name: dify-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DB_USER: dify
+      DB_PASSWORD: dify_local_2026
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: dify
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      WEAVIATE_ENDPOINT: http://weaviate:8080
+      WEAVIATE_API_KEY: your_weaviate_api_key_here
+      WEAVIATE_USERNAME: your_weaviate_username
+      WEAVIATE_PASSWORD: your_weaviate_password
+      WEAVIATE_SCHEME: http
+      WEAVIATE_HOST: weaviate
+      WEAVIATE_PORT: 8080
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/api/storage
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+
+  dify-web:
+    image: langgenius/dify-web:latest
+    container_name: dify-web
+    depends_on:
+      - dify-api
+    environment:
+      NEXT_PUBLIC_API_BASE: http://dify-api:5001
+      NEXT_PUBLIC_API_BASE_COMPRESSED: http://dify-api:5001
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n
+    container_name: n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_USER: dify
+      DB_POSTGRESDB_PASSWORD: dify_local_2026
+      DB_POSTGRESDB_DATABASE: dify
+      EXECUTIONS_DEFAULT_WAIT_TIME: 30000
+      GENERIC_TIMEZONE: "Europe/Paris"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped

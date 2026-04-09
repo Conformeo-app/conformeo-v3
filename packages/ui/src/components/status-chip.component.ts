@@ -6,7 +6,7 @@ import type { CfmTone } from "../types";
   selector: "cfm-status-chip",
   standalone: true,
   template: `
-    <span class="chip" [attr.data-tone]="tone">{{ label }}</span>
+    <span class="chip status-chip" [attr.data-tone]="tone" [attr.data-emphasis]="emphasis">{{ label }}</span>
   `,
   styles: [
     `
@@ -18,55 +18,68 @@ import type { CfmTone } from "../types";
         position: relative;
         display: inline-flex;
         align-items: center;
-        gap: 0.4rem;
+        gap: 0.32rem;
         width: fit-content;
-        padding: 0.38rem 0.78rem;
+        padding: 0.28rem 0.62rem;
         border-radius: var(--cfm-radius-pill, 999px);
-        font-size: 0.82rem;
-        font-weight: 700;
-        border: 1px solid rgba(16, 34, 43, 0.05);
-        box-shadow:
-          0 6px 16px rgba(18, 33, 42, 0.05),
-          inset 0 1px 0 rgba(255, 255, 255, 0.72);
+        font-size: 0.74rem;
+        font-weight: var(--cfm-font-weight-medium, 500);
+        letter-spacing: 0.01em;
+        border: 0;
       }
 
       .chip::before {
         content: "";
-        width: 0.45rem;
-        height: 0.45rem;
+        width: 0.34rem;
+        height: 0.34rem;
         border-radius: 999px;
         background: currentColor;
         opacity: 0.7;
       }
 
       .chip[data-tone="neutral"] {
-        background: linear-gradient(180deg, #f2f5f6, #e9eeef);
-        color: #3f5762;
+        background: var(--cfm-color-calm-bg, #eef2f5);
+        color: var(--cfm-color-calm-ink, #4b5c77);
       }
 
       .chip[data-tone="calm"] {
-        background: linear-gradient(180deg, #edf8f5, #e6f2ef);
-        color: #1e5d54;
+        background: color-mix(in srgb, var(--cfm-color-surface-muted, #f2f4f7) 88%, white);
+        color: var(--cfm-color-copy-muted, #46464d);
+      }
+
+      .chip[data-tone="accent"] {
+        background: var(--cfm-color-accent-bg, #f0ecff);
+        color: var(--cfm-color-accent-ink, #5a45b8);
       }
 
       .chip[data-tone="progress"] {
-        background: linear-gradient(180deg, #fff6e1, #fff1d4);
-        color: #8f5e00;
+        background: var(--cfm-color-info-bg, #e7eef8);
+        color: var(--cfm-color-info-ink, #24518a);
       }
 
       .chip[data-tone="success"] {
-        background: linear-gradient(180deg, #e8f8ee, #ddf4e6);
-        color: #1d6a3d;
+        background: var(--cfm-color-success-bg, #edf8f1);
+        color: var(--cfm-color-success-ink, #2f7a4f);
       }
 
       .chip[data-tone="warning"] {
-        background: linear-gradient(180deg, #fee9e3, #fde2dc);
-        color: #8a2d2d;
+        background: var(--cfm-color-warning-bg, #f8eee1);
+        color: var(--cfm-color-warning-ink, #8c5f27);
       }
 
       .chip[data-tone="danger"] {
-        background: linear-gradient(180deg, #fbe2dc, #f7d7d2);
-        color: #8e2f23;
+        background: var(--cfm-color-danger-bg, #fceeee);
+        color: var(--cfm-color-danger-ink, #a65252);
+      }
+
+      .chip[data-emphasis="soft"] {
+        background: rgba(255, 255, 255, 0.7);
+        outline: 1px solid var(--cfm-color-outline-ghost, rgba(70, 70, 77, 0.2));
+        outline-offset: -1px;
+      }
+
+      .chip[data-emphasis="soft"]::before {
+        opacity: 0.55;
       }
     `
   ],
@@ -75,4 +88,5 @@ import type { CfmTone } from "../types";
 export class CfmStatusChipComponent {
   @Input({ required: true }) label!: string;
   @Input() tone: CfmTone = "neutral";
+  @Input() emphasis: "default" | "soft" = "default";
 }

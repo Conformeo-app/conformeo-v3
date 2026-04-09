@@ -5,7 +5,7 @@ import sys
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -1003,6 +1003,49 @@ class BillingApiTest(unittest.TestCase):
         self.assertTrue(all(item["has_stored_file"] is True for item in documents))
         self.assertTrue(all((item["size_bytes"] or 0) > 0 for item in documents))
 
+    def test_generated_worksite_documents_list_skips_orphan_documents(self) -> None:
+        token = self.login("owner.facturation@conformeo.local")
+        worksite_id = self.get_first_worksite_id(token)
+
+        chantier_module_response = self.client.put(
+            "/organizations/00000000-0000-0000-0000-000000000501/modules/chantier",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_enabled": True},
+        )
+        self.assertEqual(chantier_module_response.status_code, 200, chantier_module_response.text)
+
+        summary_response = self.client.get(
+            f"/organizations/00000000-0000-0000-0000-000000000501/worksites/{worksite_id}/summary.pdf",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(summary_response.status_code, 200, summary_response.text)
+
+        session = self.SessionLocal()
+        try:
+            session.add(
+                Document(
+                    organization_id=UUID("00000000-0000-0000-0000-000000000501"),
+                    attached_to_entity_type="worksite",
+                    attached_to_entity_id=uuid4(),
+                    document_type="worksite_summary_pdf",
+                    source="worksite_generated",
+                    status=DocumentStatus.AVAILABLE,
+                    file_name="orphan-worksite-summary.pdf",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        documents_response = self.client.get(
+            "/organizations/00000000-0000-0000-0000-000000000501/worksite-documents",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(documents_response.status_code, 200, documents_response.text)
+        documents = documents_response.json()
+        self.assertEqual(len(documents), 1)
+        self.assertNotIn("orphan-worksite-summary.pdf", {item["file_name"] for item in documents})
+
     def test_generated_worksite_document_can_be_downloaded_by_document_id(self) -> None:
         token = self.login("owner.facturation@conformeo.local")
         worksite_id = self.get_first_worksite_id(token)
@@ -1334,6 +1377,40 @@ class BillingApiTest(unittest.TestCase):
         self.assertEqual(len(assignees), 2)
         member_assignee = next((item for item in assignees if item["display_name"] == "Marc Member"), None)
         self.assertIsNotNone(member_assignee)
+        owner_assignee = next((item for item in assignees if item["display_name"] == "Alice Owner"), None)
+        self.assertIsNotNone(owner_assignee)
+
+        create_team_response = self.client.post(
+            "/organizations/00000000-0000-0000-0000-000000000501/teams",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": "Equipe chantier pilote",
+                "description": "Equipe simple pour tester l'affectation chantier.",
+                "member_user_ids": [member_assignee["user_id"]],
+            },
+        )
+        self.assertEqual(create_team_response.status_code, 200, create_team_response.text)
+        created_team = create_team_response.json()
+
+        team_list_response = self.client.get(
+            "/organizations/00000000-0000-0000-0000-000000000501/worksite-teams",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(team_list_response.status_code, 200, team_list_response.text)
+        self.assertEqual(team_list_response.json()[0]["name"], "Equipe chantier pilote")
+
+        add_member_response = self.client.post(
+            f"/organizations/00000000-0000-0000-0000-000000000501/worksite-teams/{created_team['id']}/members",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"user_id": owner_assignee["user_id"]},
+        )
+        self.assertEqual(add_member_response.status_code, 200, add_member_response.text)
+        updated_team = add_member_response.json()
+        self.assertEqual(updated_team["member_count"], 2)
+        self.assertEqual(
+            {member["display_name"] for member in updated_team["members"]},
+            {"Marc Member", "Alice Owner"},
+        )
 
         worksites_response = self.client.get(
             "/organizations/00000000-0000-0000-0000-000000000501/worksites",
@@ -1342,6 +1419,7 @@ class BillingApiTest(unittest.TestCase):
         self.assertEqual(worksites_response.status_code, 200, worksites_response.text)
         worksite = worksites_response.json()[0]
         self.assertEqual(worksite["coordination"]["status"], "todo")
+        self.assertIsNone(worksite["coordination"]["team_id"])
         self.assertIsNone(worksite["coordination"]["assignee_user_id"])
         self.assertIsNone(worksite["coordination"]["comment_text"])
 
@@ -1350,6 +1428,7 @@ class BillingApiTest(unittest.TestCase):
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "status": "in_progress",
+                "team_id": created_team["id"],
                 "assignee_user_id": member_assignee["user_id"],
                 "comment_text": "Appeler le client avant l'intervention.",
             },
@@ -1357,6 +1436,8 @@ class BillingApiTest(unittest.TestCase):
         self.assertEqual(update_response.status_code, 200, update_response.text)
         updated_worksite = update_response.json()
         self.assertEqual(updated_worksite["coordination"]["status"], "in_progress")
+        self.assertEqual(updated_worksite["coordination"]["team_id"], created_team["id"])
+        self.assertEqual(updated_worksite["coordination"]["team_name"], "Equipe chantier pilote")
         self.assertEqual(updated_worksite["coordination"]["assignee_user_id"], member_assignee["user_id"])
         self.assertEqual(updated_worksite["coordination"]["assignee_display_name"], "Marc Member")
         self.assertEqual(updated_worksite["coordination"]["comment_text"], "Appeler le client avant l'intervention.")
@@ -1370,6 +1451,7 @@ class BillingApiTest(unittest.TestCase):
             item for item in reread_response.json() if item["id"] == worksite["id"]
         )
         self.assertEqual(reread_worksite["coordination"]["status"], "in_progress")
+        self.assertEqual(reread_worksite["coordination"]["team_name"], "Equipe chantier pilote")
         self.assertEqual(reread_worksite["coordination"]["assignee_display_name"], "Marc Member")
         self.assertEqual(reread_worksite["coordination"]["comment_text"], "Appeler le client avant l'intervention.")
 

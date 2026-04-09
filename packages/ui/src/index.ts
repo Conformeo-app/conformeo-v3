@@ -5,3 +5,6 @@ export * from "./components/card.component";
 export * from "./components/status-chip.component";
 export * from "./components/empty-state.component";
 export * from "./components/sync-state.component";
+export * from "./components/dashboard-template.component";
+export * from "./components/detail-template.component";
+export * from "./components/register-template.component";

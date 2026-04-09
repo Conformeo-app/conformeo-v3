@@ -1,890 +1,393 @@
 import { CommonModule } from "@angular/common";
 import { Component, inject } from "@angular/core";
-import { FormsModule } from "@angular/forms";
+import type { ModuleCode } from "@conformeo/contracts";
+import { RouterLink } from "@angular/router";
 import {
   CfmButtonComponent,
-  CfmCardComponent,
-  CfmInputComponent,
+  CfmDashboardTemplateComponent,
   CfmStatusChipComponent,
+  type CfmTone,
 } from "@conformeo/ui";
 
-import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
+import { canReadModule } from "./desktop-access.utils";
+import {
+  DESKTOP_SHELL_CONTEXT,
+  type DesktopHomeAlertItem,
+  type DesktopHomeOverviewCard,
+  type DesktopNavigationItem,
+} from "./desktop-shell-context";
+
+type HomeModuleShortcut = {
+  route: string;
+  label: string;
+  tone: CfmTone;
+  detail: string;
+};
+
+type HomeHeaderAction = {
+  route: string;
+  label: string;
+  variant: "primary" | "secondary";
+};
 
 @Component({
   selector: "cfm-desktop-home-page",
   standalone: true,
-  imports: [
-    CommonModule,
-    FormsModule,
-    CfmButtonComponent,
-    CfmCardComponent,
-    CfmInputComponent,
-    CfmStatusChipComponent,
-  ],
+  imports: [CommonModule, RouterLink, CfmButtonComponent, CfmDashboardTemplateComponent, CfmStatusChipComponent],
   template: `
-    <section class="workspace-body">
-      <cfm-card
-        class="desktop-card home-section-card home-section-card--kpis"
-        eyebrow="Cockpit"
-        title="Pilotage du jour"
-        description="Les points à surveiller maintenant."
-      >
-        <div class="hero-line">
-          <div class="hero-copy">
-            <p class="small">
-              Priorités, alertes et modules à suivre.
-            </p>
+    <cfm-dashboard-template class="cockpit-page">
+      <header cfmDashboardIntro class="cockpit-header">
+        <div class="cockpit-heading">
+          <div class="cockpit-title-block">
+            <span class="cockpit-kicker">Cockpit</span>
+            <h3>Pilotage du jour</h3>
+            <p>Repères immédiats, puis ouverture directe du bon module.</p>
           </div>
 
-          <div class="hero-chips">
-            <div class="hero-chip-primary">
-              <cfm-status-chip
-                [label]="ctx.isWorkspaceRefreshing ? 'Mise à jour en cours' : 'Workspace prêt'"
-                [tone]="ctx.isWorkspaceRefreshing ? 'progress' : 'success'"
-              />
-            </div>
-            <div class="hero-chip-secondary">
-              <cfm-status-chip
-                [label]="ctx.dashboardKpis.length + ' repère' + (ctx.dashboardKpis.length > 1 ? 's' : '')"
-                [tone]="ctx.dashboardKpis.length > 0 ? 'calm' : 'neutral'"
-              />
-            </div>
+          <div class="chips">
+            <cfm-status-chip
+              [label]="ctx.isWorkspaceRefreshing ? 'Mise à jour en cours' : 'Cockpit prêt'"
+              [tone]="ctx.isWorkspaceRefreshing ? 'progress' : 'success'"
+            />
+            <cfm-status-chip
+              [label]="visiblePriorities.length + ' priorité' + (visiblePriorities.length > 1 ? 's' : '')"
+              [tone]="visiblePriorities.length > 0 ? 'warning' : 'neutral'"
+            />
           </div>
         </div>
 
-        <div class="dashboard-grid dashboard-grid--kpis" *ngIf="ctx.dashboardKpis.length > 0; else emptyKpis">
-          <article
-            class="dashboard-kpi-card"
-            *ngFor="let kpi of ctx.dashboardKpis"
-            [class.dashboard-kpi-card--attention]="kpi.tone === 'warning' || kpi.tone === 'critical'"
+        <div class="cockpit-header-actions" *ngIf="headerActions.length > 0">
+          <cfm-button
+            *ngFor="let action of headerActions; trackBy: trackByHeaderAction"
+            type="button"
+            [variant]="action.variant"
+            size="sm"
+            [routerLink]="[action.route]"
           >
-            <p class="small">{{ kpi.label }}</p>
-            <strong>{{ kpi.value }}</strong>
-            <p>{{ kpi.detail }}</p>
-            <cfm-status-chip [label]="kpi.statusLabel" [tone]="kpi.tone" />
-          </article>
+            {{ action.label }}
+          </cfm-button>
         </div>
+      </header>
 
-        <ng-template #emptyKpis>
-          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-            <p class="state-title">
-              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun repère pour le moment" }}
-            </p>
-            <p class="small">
-              {{
-                ctx.isWorkspaceRefreshing
-                  ? "Les repères du cockpit arrivent."
-                  : "Le cockpit affichera ici les points utiles à suivre."
-              }}
-            </p>
+      <section cfmDashboardMetrics class="cockpit-kpi-band" *ngIf="visibleKpis.length > 0; else emptyKpis">
+        <article class="kpi-cell" *ngFor="let kpi of visibleKpis; trackBy: trackByKpi">
+          <span class="small">{{ kpi.label }}</span>
+          <strong>{{ kpi.value }}</strong>
+          <span>{{ kpi.detail }}</span>
+          <cfm-status-chip [label]="kpi.statusLabel" [tone]="kpi.tone" />
+        </article>
+      </section>
+
+      <ng-template #emptyKpis>
+        <section cfmDashboardMetrics class="workspace-panel cockpit-empty-state">
+          <strong>{{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun repère immédiat" }}</strong>
+          <p>
+            {{
+              ctx.isWorkspaceRefreshing
+                ? "Le cockpit recharge les repères utiles."
+                : "Les indicateurs du jour apparaîtront ici dès qu’un signal remontera."
+            }}
+          </p>
+        </section>
+      </ng-template>
+
+      <section cfmDashboardMain class="workspace-panel workspace-panel--main">
+        <div class="workspace-panel-head">
+          <div class="panel-copy">
+            <h4>Priorités</h4>
+            <span class="small">Trois sujets maximum, orientés action.</span>
           </div>
-        </ng-template>
-      </cfm-card>
-
-      <cfm-card
-        class="desktop-card home-section-card home-section-card--alerts"
-        eyebrow="Priorités"
-        title="Actions prioritaires"
-        description="Ce qui demande une action maintenant."
-      >
-        <div class="hero-chips">
           <cfm-status-chip
-            [label]="ctx.dashboardAlerts.length > 0
-              ? ctx.dashboardAlerts.length + ' priorité' + (ctx.dashboardAlerts.length > 1 ? 's' : '')
-              : 'Aucune alerte simple'"
-            [tone]="ctx.dashboardAlerts.length > 0 ? 'progress' : 'success'"
+            [label]="visiblePriorities.length + ' sujet' + (visiblePriorities.length > 1 ? 's' : '')"
+            [tone]="visiblePriorities.length > 0 ? 'warning' : 'neutral'"
           />
         </div>
 
-        <ul class="alert-list" *ngIf="ctx.dashboardAlerts.length > 0; else emptyAlerts">
-          <li class="alert-item" *ngFor="let alert of ctx.dashboardAlerts">
-            <div class="alert-copy">
-              <strong>{{ alert.title }}</strong>
-              <p>{{ alert.description }}</p>
-            </div>
-            <div class="hero-chips">
-              <cfm-status-chip [label]="alert.moduleLabel" [tone]="alert.tone" />
-            </div>
-          </li>
-        </ul>
-
-        <ng-template #emptyAlerts>
-          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-            <p class="state-title">
-              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucune priorité critique" }}
-            </p>
-            <p class="small">
-              {{
-                ctx.isWorkspaceRefreshing
-                  ? "Les alertes utiles se préparent."
-                  : "Rien d’urgent pour le moment."
-              }}
-            </p>
-          </div>
-        </ng-template>
-      </cfm-card>
-
-      <cfm-card
-        class="desktop-card home-section-card home-section-card--overview"
-        eyebrow="Vue d’ensemble"
-        title="Repères par module"
-        description="Lecture rapide des modules."
-      >
-        <div class="dashboard-grid dashboard-grid--overview" *ngIf="ctx.dashboardEnterpriseOverviewCards.length > 0; else emptyOverview">
-          <article class="dashboard-kpi-card dashboard-overview-card" *ngFor="let card of ctx.dashboardEnterpriseOverviewCards">
-            <p class="small">{{ card.label }}</p>
-            <strong class="overview-headline">{{ card.headline }}</strong>
-            <p>{{ card.detail }}</p>
-
-            <div class="overview-highlights" *ngIf="card.highlights.length > 0">
-              <div class="overview-highlight" *ngFor="let highlight of card.highlights">
-                <span class="small">{{ highlight.label }}</span>
-                <strong class="overview-highlight-value">{{ highlight.value }}</strong>
-              </div>
-            </div>
-
-            <cfm-status-chip [label]="card.statusLabel" [tone]="card.tone" />
-          </article>
+        <div class="dense-table-head" *ngIf="visiblePriorities.length > 0">
+          <span>Sujet</span>
+          <span>Module</span>
+          <span>Ouverture</span>
         </div>
 
-        <ng-template #emptyOverview>
-          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-            <p class="state-title">
-              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun repère par module" }}
-            </p>
-            <p class="small">
-              {{
-                ctx.isWorkspaceRefreshing
-                  ? "Les modules se mettent à jour."
-                  : "La vue d’ensemble apparaitra ici dès qu’un repère remonte."
-              }}
-            </p>
-          </div>
-        </ng-template>
-      </cfm-card>
-
-      <cfm-card
-        class="desktop-card home-section-card home-section-card--worksites"
-        eyebrow="Chantiers"
-        title="Chantiers à suivre"
-        description="Les points utiles pour décider vite."
-      >
-        <section class="home-site-entry" *ngIf="ctx.canManageOrganization || ctx.organizationSites.length > 0">
-          <div class="home-site-entry-header">
-            <div class="hero-copy">
-              <h3>Sites d’entreprise</h3>
-              <p class="small">
-                Ajoutez un site pour lancer l’enrichissement d’adresse et de risques sans ouvrir le module chantier.
-              </p>
+        <ul class="dense-list" *ngIf="visiblePriorities.length > 0; else emptyPriorities">
+          <li class="priority-line" *ngFor="let alert of visiblePriorities; trackBy: trackByPriority">
+            <div class="priority-line-copy">
+              <strong>{{ alert.title }}</strong>
+              <span>{{ alert.description }}</span>
             </div>
+            <cfm-status-chip [label]="alert.moduleLabel" [tone]="alert.tone" />
+            <cfm-button type="button" variant="ghost" size="sm" [routerLink]="[getPriorityRoute(alert)]">
+              Ouvrir
+            </cfm-button>
+          </li>
+        </ul>
+      </section>
 
-            <div class="hero-chips">
-              <cfm-status-chip
-                [label]="ctx.organizationSites.length > 0
-                  ? ctx.organizationSites.length + ' site' + (ctx.organizationSites.length > 1 ? 's' : '')
-                  : 'Aucun site'"
-                [tone]="ctx.organizationSites.length > 0 ? 'calm' : 'neutral'"
-              />
-
-              <cfm-button
-                *ngIf="ctx.canManageOrganization && !ctx.homeSiteQuickCreateOpen"
-                type="button"
-                variant="secondary"
-                size="sm"
-                (click)="ctx.openHomeSiteQuickCreate()"
-              >
-                Ajouter un site
-              </cfm-button>
+      <aside cfmDashboardRail class="workspace-rail">
+        <section class="workspace-panel">
+          <div class="workspace-panel-head">
+            <div class="panel-copy">
+              <h4>État du bureau</h4>
+              <span class="small">Repères compacts par zone métier.</span>
             </div>
           </div>
 
-          <form class="home-site-form" *ngIf="ctx.canManageOrganization && ctx.homeSiteQuickCreateOpen" (ngSubmit)="ctx.createSite()">
-            <cfm-input
-              [(ngModel)]="ctx.siteForm.name"
-              name="homeSiteName"
-              type="text"
-              label="Nom du site"
-              placeholder="Ex. Atelier Lyon Nord"
-              [disabled]="ctx.organizationSiteSaving"
-              required
-            />
-
-            <cfm-input
-              [(ngModel)]="ctx.siteForm.address"
-              name="homeSiteAddress"
-              type="text"
-              label="Adresse utile"
-              placeholder="Ex. 12 rue Carnot, 69002 Lyon"
-              [disabled]="ctx.organizationSiteSaving"
-              required
-            />
-
-            <div class="home-site-form-actions">
-              <cfm-button type="submit" [disabled]="ctx.organizationSiteSaving || !ctx.canCreateSite">
-                {{ ctx.organizationSiteSaving ? "Création en cours" : "Créer le site" }}
-              </cfm-button>
-              <cfm-button
-                type="button"
-                variant="ghost"
-                [disabled]="ctx.organizationSiteSaving"
-                (click)="ctx.closeHomeSiteQuickCreate()"
-              >
-                Annuler
-              </cfm-button>
-            </div>
-          </form>
-
-          <ul class="alert-list home-site-list" *ngIf="ctx.organizationSites.length > 0; else emptyHomeSites">
-            <li class="alert-item home-site-item" *ngFor="let site of ctx.organizationSites">
-              <ng-container *ngIf="ctx.getSiteEnrichmentUiState(site) as enrichment">
-                <div class="alert-copy home-site-copy">
-                  <div class="home-site-heading">
-                    <strong>{{ site.name }}</strong>
-                    <div class="hero-chips">
-                      <cfm-status-chip [label]="ctx.getSiteTypeLabel(site.site_type)" tone="calm" />
-                    </div>
-                  </div>
-
-                  <p>{{ site.address }}</p>
-
-                  <div class="home-site-enrichment">
-                    <div class="home-site-enrichment-header">
-                      <cfm-status-chip [label]="enrichment.label" [tone]="enrichment.tone" />
-                      <span class="small" *ngIf="site.location_enrichment_attempted_at">
-                        Dernière tentative : {{ site.location_enrichment_attempted_at | date: "dd/MM/yyyy HH:mm" }}
-                      </span>
-                    </div>
-
-                    <p>{{ enrichment.detail }}</p>
-                    <p class="small" *ngIf="enrichment.reasonLabel">{{ enrichment.reasonLabel }}</p>
-                    <p class="small" *ngIf="site.normalized_address">Adresse reconnue : {{ site.normalized_address }}</p>
-                    <p class="small" *ngIf="site.site_risk_summary">{{ site.site_risk_summary }}</p>
-                  </div>
-                </div>
-
-                <cfm-button
-                  *ngIf="ctx.canManageOrganization"
-                  type="button"
-                  [variant]="enrichment.showRetryAsPrimary ? 'secondary' : 'ghost'"
-                  size="sm"
-                  class="home-site-action"
-                  [disabled]="ctx.organizationSiteEnrichmentBusyId === site.id"
-                  (click)="ctx.relaunchSiteEnrichment(site)"
-                >
-                  {{
-                    ctx.organizationSiteEnrichmentBusyId === site.id
-                      ? "Relance en cours"
-                      : enrichment.retryLabel
-                  }}
-                </cfm-button>
-              </ng-container>
+          <ul class="dense-list" *ngIf="visibleOverviewCards.length > 0; else emptyOverview">
+            <li class="status-line" *ngFor="let card of visibleOverviewCards; trackBy: trackByOverview">
+              <div class="status-line-copy">
+                <strong>{{ card.label }}</strong>
+                <span>{{ card.headline }}</span>
+                <span class="small">{{ card.detail }}</span>
+              </div>
+              <cfm-status-chip [label]="card.statusLabel" [tone]="card.tone" />
             </li>
           </ul>
-
-          <ng-template #emptyHomeSites>
-            <div class="empty-copy home-site-empty" *ngIf="!ctx.homeSiteQuickCreateOpen">
-              <p class="state-title">Aucun site enregistré</p>
-              <p class="small">Ajoutez un premier site pour lancer automatiquement l’enrichissement.</p>
-            </div>
-          </ng-template>
         </section>
 
-        <div class="home-worksite-overview-header">
-          <div class="hero-copy">
-            <h3>Chantiers à suivre</h3>
-            <p class="small">
-              Les points utiles pour décider vite.
-            </p>
+        <section class="workspace-panel">
+          <div class="workspace-panel-head">
+            <div class="panel-copy">
+              <h4>Raccourcis modules</h4>
+              <span class="small">Les détails vivent dans les modules.</span>
+            </div>
           </div>
 
-          <div class="hero-chips">
-            <cfm-status-chip
-              [label]="ctx.worksiteOverviewCountLabel"
-              [tone]="ctx.filteredDashboardWorksiteOverviewItems.length > 0 ? 'calm' : 'neutral'"
-            />
-          </div>
+          <ul class="dense-list">
+            <li class="shortcut-line" *ngFor="let item of moduleShortcuts; trackBy: trackByShortcut">
+              <a class="shortcut-line-link" [routerLink]="[item.route]">
+                <div class="shortcut-line-copy">
+                  <strong>{{ item.label }}</strong>
+                  <span>{{ item.detail }}</span>
+                </div>
+                <cfm-status-chip [label]="item.label" [tone]="item.tone" />
+              </a>
+            </li>
+          </ul>
+        </section>
+      </aside>
+
+      <ng-template #emptyPriorities>
+        <div class="empty-inline">
+          <strong>Aucune priorité immédiate</strong>
+          <p>Le cockpit reste calme pour le moment.</p>
         </div>
+      </ng-template>
 
-        <ul class="alert-list" *ngIf="ctx.filteredDashboardWorksiteOverviewItems.length > 0; else emptyWorksites">
-          <li class="alert-item" *ngFor="let item of ctx.filteredDashboardWorksiteOverviewItems">
-            <div class="alert-copy worksite-copy">
-              <strong>{{ item.name }}</strong>
-              <p>{{ item.summary }}</p>
-              <p>{{ item.operationalSummary }}</p>
-              <p>{{ item.taskSummary }}</p>
-              <p>{{ item.linkedWorksiteDocumentsSummary }}</p>
-              <p *ngIf="item.financialSummary">{{ item.financialSummary }}</p>
-              <p *ngIf="item.regulatorySummary">{{ item.regulatorySummary }}</p>
-            </div>
-
-            <div class="hero-chips">
-              <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
-              <cfm-status-chip [label]="item.signalLabel" [tone]="item.signalTone" />
-            </div>
-          </li>
-        </ul>
-
-        <ng-template #emptyWorksites>
-          <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-            <p class="state-title">
-              {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun chantier à suivre" }}
-            </p>
-            <p class="small">
-              {{
-                ctx.isWorkspaceRefreshing
-                  ? "Les repères chantier se mettent à jour."
-                  : "Aucun point terrain ne demande d’action."
-              }}
-            </p>
-          </div>
-        </ng-template>
-      </cfm-card>
-
-      <cfm-card
-        class="desktop-card home-section-card home-section-card--other"
-        eyebrow="Suivi"
-        title="Suivi quotidien"
-        description="Clients et coordination sans surcharge."
-      >
-        <div class="other-grid">
-          <section class="dashboard-kpi-card other-section">
-            <div class="other-section-header">
-              <div class="hero-copy">
-                <h3>À traiter</h3>
-                <p class="small">
-                  Ce qui demande une action rapide.
-                </p>
-              </div>
-
-              <div class="hero-chips">
-                <cfm-status-chip
-                  [label]="ctx.coordinationTodoCountLabel"
-                  [tone]="ctx.coordinationTodoItems.length > 0 ? 'progress' : 'success'"
-                />
-              </div>
-            </div>
-
-            <ul class="alert-list" *ngIf="ctx.coordinationTodoItems.length > 0; else emptyCoordination">
-              <li class="alert-item" *ngFor="let item of ctx.coordinationTodoItems">
-                <div class="alert-copy">
-                  <strong>{{ item.title }}</strong>
-                  <p>{{ item.description }}</p>
-                  <p *ngIf="item.context">{{ item.context }}</p>
-                </div>
-
-                <div class="hero-chips">
-                  <cfm-status-chip [label]="item.kindLabel" [tone]="item.kindTone" />
-                  <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
-                </div>
-              </li>
-            </ul>
-
-            <ng-template #emptyCoordination>
-              <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-                <p class="state-title">
-                  {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun point à traiter" }}
-                </p>
-                <p class="small">
-                  {{
-                    ctx.isWorkspaceRefreshing
-                      ? "Le suivi quotidien se prépare."
-                      : "Rien d’urgent côté coordination."
-                  }}
-                </p>
-              </div>
-            </ng-template>
-          </section>
-
-          <section class="dashboard-kpi-card other-section">
-            <div class="other-section-header">
-              <div class="hero-copy">
-                <h3>Vue par client</h3>
-                <p class="small">
-                  Les clients qui demandent un suivi.
-                </p>
-              </div>
-
-              <div class="hero-chips">
-                <cfm-status-chip
-                  [label]="ctx.customerOverviewCountLabel"
-                  [tone]="ctx.dashboardCustomerOverviewItems.length > 0 ? 'calm' : 'neutral'"
-                />
-              </div>
-            </div>
-
-            <ul class="alert-list" *ngIf="ctx.dashboardCustomerOverviewItems.length > 0; else emptyCustomers">
-              <li class="alert-item" *ngFor="let item of ctx.dashboardCustomerOverviewItems">
-                <div class="alert-copy">
-                  <strong>{{ item.name }}</strong>
-                  <p>{{ item.summary }}</p>
-                  <p>{{ item.context }}</p>
-                </div>
-
-                <div class="hero-chips">
-                  <cfm-status-chip [label]="item.statusLabel" [tone]="item.statusTone" />
-                  <cfm-status-chip [label]="item.signalLabel" [tone]="item.signalTone" />
-                </div>
-              </li>
-            </ul>
-
-            <ng-template #emptyCustomers>
-              <div class="empty-copy" [class.empty-copy--loading]="ctx.isWorkspaceRefreshing">
-                <p class="state-title">
-                  {{ ctx.isWorkspaceRefreshing ? "Mise à jour en cours" : "Aucun client à suivre" }}
-                </p>
-                <p class="small">
-                  {{
-                    ctx.isWorkspaceRefreshing
-                      ? "Les repères client se mettent à jour."
-                      : "Aucun suivi client prioritaire pour le moment."
-                  }}
-                </p>
-              </div>
-            </ng-template>
-          </section>
+      <ng-template #emptyOverview>
+        <div class="empty-inline">
+          <strong>Aucun repère complémentaire</strong>
+          <p>Les modules détailleront les sujets au clic.</p>
         </div>
-      </cfm-card>
-    </section>
+      </ng-template>
+    </cfm-dashboard-template>
   `,
   styles: [
     `
       :host {
         display: block;
-        color: #17312b;
+        color: var(--cfm-color-ink);
       }
 
-      cfm-card.desktop-card {
-        display: block;
-      }
-
-      .workspace-body {
+      .cockpit-page,
+      .cockpit-heading,
+      .cockpit-title-block,
+      .panel-copy,
+      .priority-line-copy,
+      .status-line-copy,
+      .shortcut-line-copy,
+      .cockpit-empty-state,
+      .empty-inline {
         display: grid;
-        gap: 1.25rem;
-        min-width: 0;
-      }
-
-      .home-section-card {
-        height: 100%;
-      }
-
-      .hero-line,
-      .other-section-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.85rem;
-        min-width: 0;
-      }
-
-      .hero-line {
-        margin-bottom: 0.9rem;
-        padding-bottom: 0.15rem;
-        border-bottom: 1px solid rgba(33, 68, 49, 0.08);
-      }
-
-      .hero-copy {
-        display: grid;
-        gap: 0.25rem;
-        min-width: 0;
-      }
-
-      .hero-copy h3 {
-        margin: 0;
-        font-size: 1.02rem;
-        line-height: 1.2;
-        font-weight: 650;
-        color: #17312b;
-      }
-
-      .hero-copy p,
-      .empty-copy p {
-        margin: 0;
-      }
-
-      .hero-chips {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.45rem;
-        justify-content: flex-end;
-        min-width: 0;
-      }
-
-      .hero-chips cfm-status-chip {
-        max-width: 100%;
-      }
-
-      .hero-chip-primary,
-      .hero-chip-secondary {
-        display: inline-flex;
-      }
-
-      .hero-chip-secondary {
-        opacity: 0.78;
-      }
-
-      .dashboard-grid {
-        display: grid;
-        gap: 1rem;
-        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-        min-width: 0;
-      }
-
-      .dashboard-grid--overview {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .other-grid {
-        display: grid;
-        gap: 1rem;
-        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        min-width: 0;
-      }
-
-      .home-site-entry {
-        display: grid;
-        gap: 0.9rem;
-        margin-bottom: 1rem;
-        padding-bottom: 1rem;
-        border-bottom: 1px solid rgba(33, 68, 49, 0.08);
-      }
-
-      .home-site-entry-header,
-      .home-worksite-overview-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.85rem;
-        min-width: 0;
-      }
-
-      .home-site-form {
-        display: grid;
-        gap: 0.8rem;
-        padding: 0.95rem 1rem;
-        border-radius: 1rem;
-        border: 1px solid rgba(33, 68, 49, 0.12);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 246, 0.9));
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.9),
-          0 10px 22px rgba(18, 33, 42, 0.04);
-      }
-
-      .home-site-form-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.65rem;
-      }
-
-      .alert-list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 0.85rem;
-      }
-
-      .dashboard-kpi-card,
-      .alert-item,
-      .empty-copy {
-        border-radius: 1rem;
-        border: 1px solid rgba(33, 68, 49, 0.12);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 246, 0.9));
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.9),
-          0 10px 22px rgba(18, 33, 42, 0.04);
-        min-width: 0;
-      }
-
-      .dashboard-kpi-card {
-        display: grid;
-        gap: 0.65rem;
-        padding: 1rem 1.05rem;
-      }
-
-      .alert-item {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 1rem;
-        padding: 0.95rem 1rem;
-      }
-
-      .alert-copy {
-        display: grid;
-        gap: 0.3rem;
-        min-width: 0;
-      }
-
-      .other-section {
-        align-content: start;
-      }
-
-      .home-site-list {
-        gap: 0.75rem;
-      }
-
-      .home-site-item {
-        align-items: flex-start;
-      }
-
-      .home-site-copy {
         gap: 0.32rem;
       }
 
-      .home-site-heading {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.75rem;
-        min-width: 0;
-      }
-
-      .home-site-enrichment {
+      .cockpit-page,
+      .workspace-rail,
+      .dense-list {
         display: grid;
-        gap: 0.24rem;
-        margin-top: 0.12rem;
+        gap: 1rem;
       }
 
-      .home-site-enrichment-header {
+      .cockpit-header,
+      .workspace-panel-head,
+      .status-line,
+      .shortcut-line-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+      }
+
+      .cockpit-header {
+        align-items: start;
+        padding: 1.45rem 1.25rem 1.35rem 1.6rem;
+        border-radius: 24px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 222, 165, 0.16), transparent 28%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(242, 244, 247, 0.8));
+        box-shadow: var(--cfm-shadow-overlay);
+      }
+
+      .cockpit-header-actions,
+      .chips {
         display: flex;
         flex-wrap: wrap;
-        align-items: center;
         gap: 0.45rem;
+        align-items: center;
       }
 
-      .home-site-action {
-        align-self: flex-start;
+      .cockpit-kicker {
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--cfm-color-copy-muted);
       }
 
-      .worksite-copy p {
+      .cockpit-title-block h3,
+      .panel-copy h4 {
+        margin: 0;
+        color: var(--cfm-color-ink);
+      }
+
+      .cockpit-title-block h3 {
+        font-size: 2.55rem;
+        line-height: 0.96;
+        letter-spacing: -0.05em;
+      }
+
+      .cockpit-title-block p,
+      .panel-copy span,
+      .priority-line-copy span,
+      .status-line-copy span,
+      .shortcut-line-copy span,
+      .cockpit-empty-state p,
+      .empty-inline p {
+        margin: 0;
+        color: var(--cfm-color-copy-muted);
         line-height: 1.35;
-        overflow-wrap: anywhere;
       }
 
-      .dashboard-kpi-card p,
-      .dashboard-kpi-card strong,
-      .alert-copy p,
-      .alert-copy strong {
-        margin: 0;
-      }
-
-      .dashboard-kpi-card p,
-      .alert-copy p {
-        color: #415349;
-        line-height: 1.4;
-      }
-
-      .dashboard-kpi-card > .small,
-      .overview-highlight .small {
-        font-weight: 600;
-        letter-spacing: 0.01em;
-        color: #52635a;
-      }
-
-      .alert-copy strong {
-        font-size: 0.98rem;
-        line-height: 1.25;
-        color: #17312b;
-      }
-
-      .dashboard-kpi-card > strong:not(.overview-headline) {
-        font-size: 1.65rem;
-        line-height: 1.05;
-        letter-spacing: -0.02em;
-        color: #17312b;
-      }
-
-      .dashboard-kpi-card--attention {
-        border-color: rgba(186, 131, 34, 0.28);
-        background: linear-gradient(180deg, rgba(255, 252, 245, 0.97), rgba(247, 243, 232, 0.92));
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.94),
-          0 12px 24px rgba(120, 84, 24, 0.08);
-      }
-
-      .dashboard-kpi-card--attention > strong {
-        color: #7a4a1f;
-      }
-
-      .overview-highlights {
+      .cockpit-kpi-band {
         display: grid;
-        gap: 0.65rem;
-        grid-template-columns: minmax(0, 1fr);
-        min-width: 0;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
       }
 
-      .overview-highlight {
+      .kpi-cell {
         display: grid;
-        gap: 0.25rem;
-        padding: 0.7rem 0.75rem;
-        border-radius: 0.85rem;
-        background: rgba(33, 68, 49, 0.04);
-        border: 1px solid rgba(33, 68, 49, 0.08);
-        min-width: 0;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.22rem 0.55rem;
+        align-items: center;
+        padding: 1rem 1rem 0.95rem 1.15rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.84);
+        box-shadow: var(--cfm-shadow-soft);
       }
 
-      .overview-highlight strong,
-      .overview-highlight span {
-        margin: 0;
+      .kpi-cell strong {
+        font-family: var(--cfm-font-display);
+        font-size: 2.05rem;
+        line-height: 0.92;
+        color: var(--cfm-color-ink);
       }
 
-      .dashboard-overview-card {
-        gap: 0.55rem;
+      .kpi-cell span:last-of-type {
+        grid-column: 1 / 2;
       }
 
-      .dashboard-overview-card p {
-        line-height: 1.4;
-        word-break: normal;
-        overflow-wrap: break-word;
-        hyphens: auto;
+      .workspace-panel,
+      .cockpit-empty-state {
+        padding: 1rem 1rem 1.05rem 1.15rem;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: var(--cfm-shadow-soft);
       }
 
-      .dashboard-overview-card > .overview-headline {
-        font-size: 1.08rem;
-        line-height: 1.25;
-        color: #17312b;
-        word-break: normal;
-        overflow-wrap: break-word;
-        hyphens: auto;
-      }
-
-      .overview-highlight .small {
-        line-height: 1.2;
-      }
-
-      .overview-highlight-value {
-        font-size: 0.9rem;
-        line-height: 1.25;
-        word-break: normal;
-        overflow-wrap: break-word;
-        hyphens: auto;
-      }
-
-      .empty-copy {
-        display: grid;
-        gap: 0.28rem;
-        padding: 0.94rem 1rem;
-        border-style: dashed;
+      .workspace-panel--main {
         align-content: start;
       }
 
-      .empty-copy--loading {
-        border-color: rgba(168, 131, 60, 0.2);
-        background: linear-gradient(180deg, rgba(255, 249, 238, 0.96), rgba(255, 255, 255, 0.9));
+      .dense-table-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 0.7rem;
+        padding: 0 0.18rem;
+        font-size: 0.74rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--cfm-color-copy-muted);
       }
 
-      .state-title {
+      .dense-list {
+        list-style: none;
         margin: 0;
-        font-size: 0.92rem;
-        line-height: 1.25;
-        font-weight: 650;
-        color: #17312b;
+        padding: 0;
       }
 
-      .empty-copy--loading .state-title {
-        color: #6c5422;
+      .priority-line {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 0.7rem;
+        align-items: center;
+        padding: 1rem 0.4rem 1rem 1rem;
+        border-radius: 16px;
+        background: var(--cfm-color-surface-muted);
       }
 
-      .small {
-        font-size: 0.84rem;
-        line-height: 1.35;
-        color: #617166;
+      .status-line,
+      .shortcut-line-link {
+        padding: 1rem 0.4rem 1rem 1rem;
+        border-radius: 16px;
+        background: var(--cfm-color-surface-muted);
       }
 
-      .empty-copy .small {
-        max-width: 44ch;
+      .shortcut-line {
+        list-style: none;
+      }
+
+      .shortcut-line-link {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .shortcut-line-link:hover {
+        background: var(--cfm-color-surface-high);
+      }
+
+      .priority-line-copy strong,
+      .status-line-copy strong,
+      .shortcut-line-copy strong,
+      .cockpit-empty-state strong,
+      .empty-inline strong {
+        color: var(--cfm-color-ink);
+      }
+
+      .empty-inline {
+        padding: 0.45rem 0;
       }
 
       @media (max-width: 1280px) {
-        .dashboard-grid--overview {
+        .cockpit-kpi-band {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
-
-        .dashboard-grid--overview > .dashboard-overview-card:last-child:nth-child(odd) {
-          grid-column: 1 / -1;
-        }
       }
 
-      @media (max-width: 1180px) {
-        .workspace-body {
-          gap: 1.15rem;
+      @media (max-width: 960px) {
+        .cockpit-header,
+        .workspace-panel-head,
+        .kpi-cell,
+        .status-line,
+        .shortcut-line-link {
+          display: grid;
         }
 
-        .dashboard-grid--kpis {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .other-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 1024px) {
-        .hero-line,
-        .other-section-header,
-        .home-site-entry-header,
-        .home-worksite-overview-header {
-          flex-direction: column;
-        }
-
-        .hero-chips {
-          justify-content: flex-start;
-        }
-
-        .alert-item,
-        .home-site-form-actions {
-          flex-direction: column;
-        }
-      }
-
-      @media (max-width: 820px) {
-        .dashboard-grid--kpis,
-        .dashboard-grid--overview {
+        .dense-table-head,
+        .priority-line {
           grid-template-columns: 1fr;
         }
 
-        .dashboard-kpi-card,
-        .alert-item,
-        .empty-copy {
-          padding: 0.95rem;
-        }
-
-        .home-section-card--worksites .alert-list,
-        .home-section-card--other .alert-list {
-          gap: 0.7rem;
-        }
-
-        .home-section-card--worksites .alert-item,
-        .home-section-card--other .alert-item {
-          gap: 0.72rem;
-          padding: 0.82rem 0.88rem;
-        }
-
-        .home-site-form {
-          padding: 0.88rem 0.9rem;
-        }
-
-        .home-section-card--other .dashboard-kpi-card {
-          gap: 0.55rem;
-          padding: 0.86rem 0.9rem;
-        }
-
-        .home-section-card--worksites .hero-chips,
-        .home-section-card--other .hero-chips {
-          gap: 0.32rem;
-        }
-
-        .home-section-card--worksites .alert-copy,
-        .home-section-card--other .alert-copy,
-        .home-section-card--other .hero-copy {
-          gap: 0.22rem;
-        }
-
-        .home-site-entry {
-          gap: 0.82rem;
-          margin-bottom: 0.9rem;
-          padding-bottom: 0.9rem;
+        .cockpit-kpi-band {
+          grid-template-columns: 1fr;
         }
       }
     `,
@@ -892,4 +395,134 @@ import { DESKTOP_SHELL_CONTEXT } from "./desktop-shell-context";
 })
 export class DesktopHomePageComponent {
   readonly ctx = inject(DESKTOP_SHELL_CONTEXT);
+
+  get visibleKpis() {
+    return this.ctx.dashboardKpis.slice(0, 4);
+  }
+
+  get visiblePriorities() {
+    return this.ctx.dashboardAlerts
+      .filter((item) => this.canOpenModuleLabel(item.moduleLabel))
+      .slice(0, 3);
+  }
+
+  get visibleOverviewCards(): DesktopHomeOverviewCard[] {
+    return this.ctx.dashboardEnterpriseOverviewCards
+      .filter((item) => this.canOpenModuleLabel(item.label))
+      .slice(0, 3);
+  }
+
+  get headerActions(): HomeHeaderAction[] {
+    const actions: HomeHeaderAction[] = [
+      { route: "/app/reglementation", label: "Réglementation", variant: "secondary" },
+      { route: "/app/chantiers", label: "Chantiers", variant: "primary" },
+    ];
+
+    return actions.filter((item) => this.canOpenModuleRoute(item.route));
+  }
+
+  get moduleShortcuts(): HomeModuleShortcut[] {
+    return this.ctx.desktopNavigationItems
+      .filter((item) => item.route !== "/app/home")
+      .filter((item) => this.canOpenModuleRoute(item.route))
+      .slice(0, 3)
+      .map((item) => ({
+        route: item.route,
+        label: item.label,
+        tone: item.tone,
+        detail: this.getShortcutDetail(item),
+      }));
+  }
+
+  getPriorityRoute(item: DesktopHomeAlertItem): string {
+    const moduleCode = this.getModuleCodeFromLabel(item.moduleLabel);
+
+    switch (moduleCode) {
+      case "reglementation":
+        return "/app/reglementation";
+      case "chantier":
+        return "/app/chantiers";
+      case "facturation":
+        return "/app/facturation";
+      default:
+        return "/app/home";
+    }
+  }
+
+  private getShortcutDetail(item: DesktopNavigationItem): string {
+    switch (item.route) {
+      case "/app/reglementation":
+        return "Pilotage, obligations et preuves.";
+      case "/app/chantiers":
+        return "Terrain, documents et coordination.";
+      case "/app/facturation":
+        return "Clients, factures et relances.";
+      default:
+        return "Ouvrir le module.";
+    }
+  }
+
+  trackByKpi(_index: number, item: { id: string }): string {
+    return item.id;
+  }
+
+  trackByPriority(_index: number, item: { id: string }): string {
+    return item.id;
+  }
+
+  trackByOverview(_index: number, item: { id: string }): string {
+    return item.id;
+  }
+
+  trackByShortcut(_index: number, item: { route: string }): string {
+    return item.route;
+  }
+
+  trackByHeaderAction(_index: number, item: { route: string }): string {
+    return item.route;
+  }
+
+  private canOpenModuleRoute(route: string): boolean {
+    const moduleCode = this.getModuleCodeFromRoute(route);
+    return moduleCode === null || canReadModule(this.ctx.currentMembership, moduleCode);
+  }
+
+  private canOpenModuleLabel(label: string): boolean {
+    const moduleCode = this.getModuleCodeFromLabel(label);
+    return moduleCode === null || canReadModule(this.ctx.currentMembership, moduleCode);
+  }
+
+  private getModuleCodeFromRoute(route: string): ModuleCode | null {
+    if (route.startsWith("/app/reglementation")) {
+      return "reglementation";
+    }
+
+    if (route.startsWith("/app/chantiers")) {
+      return "chantier";
+    }
+
+    if (route.startsWith("/app/facturation")) {
+      return "facturation";
+    }
+
+    return null;
+  }
+
+  private getModuleCodeFromLabel(label: string): ModuleCode | null {
+    const normalizedLabel = label.trim().toLowerCase();
+
+    if (normalizedLabel.includes("réglementation") || normalizedLabel.includes("reglementation")) {
+      return "reglementation";
+    }
+
+    if (normalizedLabel.includes("chantier")) {
+      return "chantier";
+    }
+
+    if (normalizedLabel.includes("facturation")) {
+      return "facturation";
+    }
+
+    return null;
+  }
 }

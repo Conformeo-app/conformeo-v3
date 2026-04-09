@@ -20,6 +20,11 @@ import type {
   OrganizationRegulatoryProfileRecord,
   OrganizationProfileUpdateRequest,
   OrganizationRecord,
+  OrganizationMemberCreateRequest,
+  OrganizationMemberRecord,
+  OrganizationMemberUpdateRequest,
+  OrganizationTeamRecord,
+  OrganizationTeamUpsertRequest,
   RegulatoryEvidenceCreateRequest,
   RegulatoryEvidenceRecord,
   OrganizationSiteCreateRequest,
@@ -35,14 +40,25 @@ import type {
   InvoiceWorksiteLinkUpdateRequest,
   WorksiteApiSummary,
   WorksiteAssigneeRecord,
+  WorksiteCreateRequest,
   WorksiteCoordinationUpdateRequest,
   WorksiteDocumentProofUpdateRequest,
   WorksiteDocumentStatusUpdateRequest,
   WorksiteDocumentSignatureUpdateRequest,
   WorksiteDocumentRecord,
-  WorksiteProofRecord,
-  WorksitePreventionPlanExportRequest,
-  WorksiteSignatureRecord
+  WorksiteEquipment,
+    WorksiteEquipmentCreateRequest,
+    WorksiteEquipmentMovement,
+    WorksiteEquipmentMovementCreateRequest,
+    WorksiteInterventionCreateRequest,
+    WorksiteInterventionRecord,
+    WorksiteInterventionUpdateRequest,
+    WorksiteProofRecord,
+    WorksitePreventionPlanExportRequest,
+    WorksiteSignatureRecord,
+  WorksiteStatusUpdateRequest,
+  WorksiteTeamMemberAddRequest,
+  WorksiteTeamRecord,
 } from "@conformeo/contracts";
 import { generatedEnv } from "../environments/generated-env";
 import { ApiClientError, createHttpApiError, createNetworkApiError, createTimeoutApiError } from "./api-error";
@@ -94,7 +110,6 @@ type JsonRequestOptions = {
 };
 
 async function requestJson<T>(input: string, init: RequestInit, options: JsonRequestOptions = {}): Promise<T> {
-  const method = (init.method ?? "GET").toUpperCase();
   const controller =
     options.timeoutMs && typeof AbortController !== "undefined"
       ? new AbortController()
@@ -117,12 +132,20 @@ async function requestJson<T>(input: string, init: RequestInit, options: JsonReq
     let payload: unknown = null;
 
     if (trimmedText) {
-      payload = JSON.parse(trimmedText);
+      try {
+        payload = JSON.parse(trimmedText);
+      } catch {
+        payload = trimmedText;
+      }
     }
 
     if (!response.ok) {
       const detail =
-        payload && typeof payload === "object" && "detail" in payload ? String(payload.detail) : "Erreur API.";
+        payload && typeof payload === "object" && "detail" in payload
+          ? String(payload.detail)
+          : typeof payload === "string" && payload.length > 0
+            ? payload
+            : "Erreur API.";
       throw createHttpApiError(response.status, detail);
     }
 
@@ -206,6 +229,98 @@ export async function updateOrganizationProfile(
   return parseJsonResponse<OrganizationRecord>(response);
 }
 
+export async function listOrganizationMembers(
+  accessToken: string,
+  organizationId: string
+): Promise<OrganizationMemberRecord[]> {
+  return requestJson<OrganizationMemberRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/members`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des utilisateurs",
+  });
+}
+
+export async function createOrganizationMember(
+  accessToken: string,
+  organizationId: string,
+  payload: OrganizationMemberCreateRequest
+): Promise<OrganizationMemberRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/members`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<OrganizationMemberRecord>(response);
+}
+
+export async function updateOrganizationMember(
+  accessToken: string,
+  organizationId: string,
+  membershipId: string,
+  payload: OrganizationMemberUpdateRequest
+): Promise<OrganizationMemberRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/members/${membershipId}`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<OrganizationMemberRecord>(response);
+}
+
+export async function listOrganizationTeams(
+  accessToken: string,
+  organizationId: string
+): Promise<OrganizationTeamRecord[]> {
+  return requestJson<OrganizationTeamRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/teams`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des équipes",
+  });
+}
+
+export async function createOrganizationTeam(
+  accessToken: string,
+  organizationId: string,
+  payload: OrganizationTeamUpsertRequest
+): Promise<OrganizationTeamRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/teams`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<OrganizationTeamRecord>(response);
+}
+
+export async function updateOrganizationTeam(
+  accessToken: string,
+  organizationId: string,
+  teamId: string,
+  payload: OrganizationTeamUpsertRequest
+): Promise<OrganizationTeamRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/teams/${teamId}`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<OrganizationTeamRecord>(response);
+}
+
 export async function listOrganizationSites(
   accessToken: string,
   organizationId: string
@@ -275,6 +390,22 @@ export async function listWorksites(
   });
 }
 
+export async function createWorksite(
+  accessToken: string,
+  organizationId: string,
+  payload: WorksiteCreateRequest
+): Promise<WorksiteApiSummary> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteApiSummary>(response);
+}
+
 export async function listWorksiteAssignees(
   accessToken: string,
   organizationId: string
@@ -286,6 +417,95 @@ export async function listWorksiteAssignees(
     timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
     timeoutLabel: "des affectations chantier",
   });
+}
+
+export async function listWorksiteTeams(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteTeamRecord[]> {
+  return requestJson<WorksiteTeamRecord[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-teams`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des équipes chantier",
+  });
+}
+
+export async function addWorksiteTeamMember(
+  accessToken: string,
+  organizationId: string,
+  teamId: string,
+  payload: WorksiteTeamMemberAddRequest
+): Promise<WorksiteTeamRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-teams/${teamId}/members`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteTeamRecord>(response);
+}
+
+export async function listWorksiteEquipments(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteEquipment[]> {
+  return requestJson<WorksiteEquipment[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-equipments`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des équipements chantier",
+  });
+}
+
+export async function createWorksiteEquipment(
+  accessToken: string,
+  organizationId: string,
+  payload: WorksiteEquipmentCreateRequest
+): Promise<WorksiteEquipment> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-equipments`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteEquipment>(response);
+}
+
+export async function listWorksiteEquipmentMovements(
+  accessToken: string,
+  organizationId: string
+): Promise<WorksiteEquipmentMovement[]> {
+  return requestJson<WorksiteEquipmentMovement[]>(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-equipment-movements`, {
+    method: "GET",
+    headers: buildHeaders(accessToken, organizationId)
+  }, {
+    timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
+    timeoutLabel: "des mouvements d’équipement",
+  });
+}
+
+export async function recordWorksiteEquipmentMovement(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string,
+  payload: WorksiteEquipmentMovementCreateRequest
+): Promise<WorksiteEquipmentMovement> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/equipment-movements`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteEquipmentMovement>(response);
 }
 
 export async function listWorksiteDocuments(
@@ -414,6 +634,57 @@ export async function updateWorksiteCoordination(
     body: JSON.stringify(payload)
   });
   return parseJsonResponse<WorksiteApiSummary>(response);
+}
+
+export async function updateWorksiteStatus(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string,
+  payload: WorksiteStatusUpdateRequest
+): Promise<WorksiteApiSummary> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/status`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteApiSummary>(response);
+}
+
+export async function createWorksiteIntervention(
+  accessToken: string,
+  organizationId: string,
+  worksiteId: string,
+  payload: WorksiteInterventionCreateRequest
+): Promise<WorksiteInterventionRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksites/${worksiteId}/interventions`, {
+    method: "POST",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteInterventionRecord>(response);
+}
+
+export async function updateWorksiteIntervention(
+  accessToken: string,
+  organizationId: string,
+  interventionId: string,
+  payload: WorksiteInterventionUpdateRequest
+): Promise<WorksiteInterventionRecord> {
+  const response = await fetch(`${getApiBaseUrl()}/organizations/${organizationId}/worksite-interventions/${interventionId}`, {
+    method: "PATCH",
+    headers: {
+      ...buildHeaders(accessToken, organizationId),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  return parseJsonResponse<WorksiteInterventionRecord>(response);
 }
 
 export async function updateWorksiteDocumentCoordination(

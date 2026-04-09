@@ -16,7 +16,7 @@ from app.api.external_dependencies import (
     get_site_location_enrichment_service,
 )
 from app.api.dependencies import OrganizationAccessContext, require_module_enabled, require_permissions
-from app.core.access import list_organization_modules
+from app.core.access import get_role_label, list_organization_modules
 from app.core.audit import list_audit_logs, record_audit_log
 from app.core.billing import (
     compute_billing_line_items,
@@ -77,7 +77,21 @@ from app.core.worksite_coordination import (
     list_worksite_coordination_items,
     serialize_worksite_coordination,
 )
-from app.core.worksites import get_worksite_summary, list_worksite_lookup, list_worksite_summaries
+from app.core.worksite_equipment import (
+    create_worksite_equipment,
+    get_worksite_equipment,
+    list_worksite_equipments,
+    list_worksite_equipment_movements,
+    serialize_worksite_equipment,
+    serialize_worksite_equipment_movement,
+)
+from app.core.worksites import (
+    get_worksite_summary,
+    list_worksite_lookup,
+    list_worksite_summaries,
+    serialize_worksite_intervention,
+    serialize_worksite_summary,
+)
 from app.core.worksite_export_pdf import build_worksite_prevention_plan_pdf, build_worksite_summary_pdf
 from app.db.models import (
     AuditAction,
@@ -90,14 +104,27 @@ from app.db.models import (
     DuerpEntryStatus,
     Invoice,
     InvoiceStatus,
+    Organization,
     OrganizationMembership,
     OrganizationModuleCode,
     OrganizationSite,
     OrganizationSiteStatus,
+    OrganizationTeam,
+    OrganizationTeamMember,
     Quote,
     QuoteStatus,
     User,
     UserStatus,
+    Worksite,
+    WorksiteEquipment,
+    WorksiteEquipmentMovement,
+    WorksiteEquipmentMovementType,
+    WorksiteEquipmentStatus,
+    WorksiteIntervention,
+    WorksiteInterventionResult,
+    WorksiteInterventionStatus,
+    WorksiteInterventionType,
+    WorksiteStatus,
 )
 from app.db.session import get_db_session
 from app.integrations.base import (
@@ -158,14 +185,26 @@ from app.schemas.quote import (
 from app.schemas.regulatory_evidence import RegulatoryEvidenceCreateRequest, RegulatoryEvidenceRead
 from app.schemas.worksite import (
     WorksiteAssigneeRead,
+    WorksiteTeamMemberAddRequest,
+    WorksiteTeamMemberRead,
+    WorksiteTeamRead,
     WorksiteCoordinationUpdateRequest,
+    WorksiteCreateRequest,
     WorksiteDocumentRead,
     WorksiteDocumentProofUpdateRequest,
     WorksiteDocumentSignatureUpdateRequest,
     WorksiteDocumentStatusUpdateRequest,
+    WorksiteEquipmentCreateRequest,
+    WorksiteEquipmentMovementCreateRequest,
+    WorksiteEquipmentMovementRead,
+    WorksiteEquipmentRead,
+    WorksiteInterventionCreateRequest,
+    WorksiteInterventionRead,
+    WorksiteInterventionUpdateRequest,
     WorksitePreventionPlanExportRequest,
     WorksiteProofRead,
     WorksiteSignatureRead,
+    WorksiteStatusUpdateRequest,
     WorksiteSummaryRead,
 )
 from app.services import OrganizationRegistrySyncService, SiteLocationEnrichmentService
@@ -377,13 +416,41 @@ def get_invoice_or_404(db: Session, organization_id: UUID, invoice_id: UUID) -> 
     return invoice
 
 
-def get_worksite_name_or_404(organization_id: UUID, worksite_id: UUID | None) -> str | None:
+def get_worksite_name_or_404(
+    db: Session,
+    organization: object,
+    worksite_id: UUID | None,
+) -> str | None:
     if worksite_id is None:
         return None
-    worksite = get_worksite_summary(organization_id, worksite_id)
+    worksite = get_worksite_summary(db, organization, worksite_id)
     if worksite is None:
         raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
     return str(worksite["name"])
+
+
+def get_worksite_name(
+    db: Session,
+    organization: object,
+    worksite_id: UUID | None,
+) -> str | None:
+    if worksite_id is None:
+        return None
+    worksite = get_worksite_summary(db, organization, worksite_id)
+    if worksite is None:
+        return None
+    return str(worksite["name"])
+
+
+def get_persisted_worksite_or_404(
+    db: Session,
+    organization_id: UUID,
+    worksite_id: UUID,
+) -> Worksite:
+    worksite = db.get(Worksite, worksite_id)
+    if worksite is None or worksite.deleted_at is not None or worksite.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
+    return worksite
 
 
 def list_active_worksite_assignees(db: Session, organization_id: UUID) -> list[OrganizationMembership]:
@@ -414,13 +481,97 @@ def list_active_worksite_assignees(db: Session, organization_id: UUID) -> list[O
     )
 
 
+def list_worksite_teams(db: Session, organization_id: UUID) -> list[OrganizationTeam]:
+    return (
+        db.execute(
+            select(OrganizationTeam)
+            .options(
+                selectinload(OrganizationTeam.members).selectinload(OrganizationTeamMember.user),
+            )
+            .where(
+                OrganizationTeam.organization_id == organization_id,
+                OrganizationTeam.deleted_at.is_(None),
+            )
+            .order_by(OrganizationTeam.name.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+
+def serialize_worksite_team_read(
+    team: OrganizationTeam,
+    memberships_by_user_id: dict[UUID, OrganizationMembership],
+) -> WorksiteTeamRead:
+    members = sorted(
+        [
+            member
+            for member in team.members
+            if member.deleted_at is None
+            and member.user is not None
+            and member.user.deleted_at is None
+            and member.user.status == UserStatus.ACTIVE
+        ],
+        key=lambda item: item.user.display_name.lower(),
+    )
+    return WorksiteTeamRead(
+        id=team.id,
+        name=team.name,
+        description=team.description,
+        member_count=len(members),
+        members=[
+            WorksiteTeamMemberRead(
+                user_id=member.user.id,
+                display_name=member.user.display_name,
+                role_code=memberships_by_user_id.get(member.user_id).role_code
+                if memberships_by_user_id.get(member.user_id) is not None
+                else "member",
+                role_label=get_role_label(
+                    memberships_by_user_id.get(member.user_id).role_code
+                    if memberships_by_user_id.get(member.user_id) is not None
+                    else "member"
+                ),
+            )
+            for member in members
+        ],
+    )
+
+
+def resolve_worksite_team_or_404(
+    db: Session,
+    organization_id: UUID,
+    team_id: UUID | None,
+) -> OrganizationTeam | None:
+    if team_id is None:
+        return None
+
+    team = (
+        db.execute(
+            select(OrganizationTeam)
+            .options(
+                selectinload(OrganizationTeam.members).selectinload(OrganizationTeamMember.user),
+            )
+            .where(
+                OrganizationTeam.id == team_id,
+                OrganizationTeam.organization_id == organization_id,
+                OrganizationTeam.deleted_at.is_(None),
+            )
+        )
+        .scalars()
+        .one_or_none()
+    )
+    if team is None:
+        raise HTTPException(status_code=404, detail="Équipe introuvable pour cette organisation.")
+    return team
+
+
 def build_worksite_summary_document_bundle(
     db: Session,
     organization_id: UUID,
     organization: object,
     worksite_id: UUID,
 ) -> tuple[dict[str, object], bytes, str, str]:
-    worksite = get_worksite_summary(organization_id, worksite_id)
+    worksite = get_worksite_summary(db, organization, worksite_id)
     if worksite is None:
         raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
 
@@ -466,7 +617,7 @@ def build_worksite_prevention_plan_document_bundle(
     *,
     payload: WorksitePreventionPlanExportRequest | None = None,
 ) -> tuple[dict[str, object], bytes, str, str]:
-    worksite = get_worksite_summary(organization_id, worksite_id)
+    worksite = get_worksite_summary(db, organization, worksite_id)
     if worksite is None:
         raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
 
@@ -516,6 +667,58 @@ def resolve_worksite_assignee_or_404(
     return membership
 
 
+def resolve_worksite_intervention_or_404(
+    db: Session,
+    organization_id: UUID,
+    intervention_id: UUID,
+) -> WorksiteIntervention:
+    intervention = (
+        db.execute(
+            select(WorksiteIntervention)
+            .options(
+                selectinload(WorksiteIntervention.team),
+                selectinload(WorksiteIntervention.assignee_user),
+            )
+            .where(
+                WorksiteIntervention.organization_id == organization_id,
+                WorksiteIntervention.id == intervention_id,
+                WorksiteIntervention.deleted_at.is_(None),
+            )
+        )
+        .scalar_one_or_none()
+    )
+    if intervention is None:
+        raise HTTPException(status_code=404, detail="Intervention chantier introuvable pour cette organisation.")
+    return intervention
+
+
+def validate_worksite_intervention_payload(
+    db: Session,
+    organization_id: UUID,
+    *,
+    team_id: UUID | None,
+    assignee_user_id: UUID | None,
+    status: WorksiteInterventionStatus,
+    scheduled_for: datetime | None,
+) -> tuple[OrganizationTeam | None, OrganizationMembership | None]:
+    assigned_team = resolve_worksite_team_or_404(db, organization_id, team_id)
+    assignee_membership = resolve_worksite_assignee_or_404(db, organization_id, assignee_user_id)
+    if status == WorksiteInterventionStatus.PLANNED and scheduled_for is None:
+        raise HTTPException(status_code=400, detail="Une intervention planifiée doit avoir une date prévue.")
+    if assigned_team is not None and assignee_membership is not None:
+        team_member_user_ids = {
+            member.user_id
+            for member in assigned_team.members
+            if member.deleted_at is None
+        }
+        if assignee_membership.user_id not in team_member_user_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Le référent choisi doit appartenir à l'équipe d'intervention.",
+            )
+    return assigned_team, assignee_membership
+
+
 def serialize_worksite_document_read(
     db: Session,
     organization_id: UUID,
@@ -523,6 +726,9 @@ def serialize_worksite_document_read(
     *,
     coordination_index: dict[tuple[str, UUID], object] | None = None,
 ) -> WorksiteDocumentRead:
+    organization = db.get(Organization, organization_id)
+    if organization is None or organization.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Organisation introuvable.")
     linked_signature = None
     if document.linked_signature_document_id is not None:
         linked_signature = get_worksite_signature_document(
@@ -562,7 +768,7 @@ def serialize_worksite_document_read(
     return WorksiteDocumentRead.model_validate(
         serialize_worksite_document(
             document,
-            worksite_name=get_worksite_name_or_404(organization_id, document.attached_to_entity_id) or "Chantier",
+            worksite_name=get_worksite_name_or_404(db, organization, document.attached_to_entity_id) or "Chantier",
             linked_signature=linked_signature,
             linked_proofs=linked_proofs,
         )
@@ -1018,7 +1224,7 @@ def build_cockpit_summary(
         )
 
     if chantier_enabled:
-        worksites = list_worksite_summaries(organization_id)
+        worksites = list_worksite_summaries(db, organization)
         worksite_documents = list_worksite_documents(db, organization_id)
         blocked_worksites_count = sum(1 for worksite in worksites if worksite["status"] == "blocked")
         planned_worksites_count = sum(1 for worksite in worksites if worksite["status"] == "planned")
@@ -2161,7 +2367,7 @@ def read_quotes(
     context: OrganizationAccessContext = Depends(require_billing_read),
     db: Session = Depends(get_db_session),
 ) -> list[QuoteRead]:
-    worksite_lookup = list_worksite_lookup(context.organization.id)
+    worksite_lookup = list_worksite_lookup(db, context.organization)
     quotes = list_quotes_for_organization(db, context.organization.id)
     return [
         QuoteRead.model_validate(
@@ -2185,7 +2391,7 @@ def create_quote(
     db: Session = Depends(get_db_session),
 ) -> QuoteRead:
     customer = get_billing_customer_or_404(db, context.organization.id, payload.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
     sequence_number = next_quote_sequence_number(db, context.organization.id)
     line_items, subtotal_amount_cents = compute_billing_line_items(
         [item.model_dump() for item in payload.line_items]
@@ -2248,7 +2454,7 @@ def update_quote_follow_up_status(
         return QuoteRead.model_validate(
             serialize_quote(
                 quote,
-                worksite_name=get_worksite_name_or_404(context.organization.id, quote.worksite_id),
+                worksite_name=get_worksite_name_or_404(db, context.organization, quote.worksite_id),
             )
         )
 
@@ -2277,7 +2483,7 @@ def update_quote_follow_up_status(
     return QuoteRead.model_validate(
         serialize_quote(
             quote,
-            worksite_name=get_worksite_name_or_404(context.organization.id, quote.worksite_id),
+            worksite_name=get_worksite_name_or_404(db, context.organization, quote.worksite_id),
         )
     )
 
@@ -2295,8 +2501,8 @@ def update_quote(
 ) -> QuoteRead:
     quote = get_quote_or_404(db, context.organization.id, quote_id)
     customer = get_billing_customer_or_404(db, context.organization.id, payload.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
-    previous_worksite_name = get_worksite_name_or_404(context.organization.id, quote.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
+    previous_worksite_name = get_worksite_name_or_404(db, context.organization, quote.worksite_id)
     line_items, subtotal_amount_cents = compute_billing_line_items(
         [item.model_dump() for item in payload.line_items]
     )
@@ -2391,7 +2597,7 @@ def update_quote_status(
     return QuoteRead.model_validate(
         serialize_quote(
             quote,
-            worksite_name=get_worksite_name_or_404(context.organization.id, quote.worksite_id),
+            worksite_name=get_worksite_name_or_404(db, context.organization, quote.worksite_id),
         )
     )
 
@@ -2408,7 +2614,7 @@ def update_quote_worksite(
     db: Session = Depends(get_db_session),
 ) -> QuoteRead:
     quote = get_quote_or_404(db, context.organization.id, quote_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
     if quote.worksite_id == payload.worksite_id:
         return QuoteRead.model_validate(serialize_quote(quote, worksite_name=worksite_name))
 
@@ -2429,7 +2635,7 @@ def update_quote_worksite(
                 "to": str(payload.worksite_id) if payload.worksite_id else None,
             },
             "worksite_name": {
-                "from": get_worksite_name_or_404(context.organization.id, previous_worksite_id),
+                "from": get_worksite_name_or_404(db, context.organization, previous_worksite_id),
                 "to": worksite_name,
             },
         },
@@ -2452,7 +2658,7 @@ def download_quote_pdf(
 ) -> Response:
     quote = get_quote_or_404(db, context.organization.id, quote_id)
     customer = get_billing_customer_or_404(db, context.organization.id, quote.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, quote.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, quote.worksite_id)
     pdf_bytes = build_quote_pdf(
         context.organization,
         serialize_quote(quote, worksite_name=worksite_name),
@@ -2478,7 +2684,7 @@ def duplicate_quote_to_invoice(
 ) -> InvoiceRead:
     quote = get_quote_or_404(db, context.organization.id, quote_id)
     customer = get_billing_customer_or_404(db, context.organization.id, quote.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, quote.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, quote.worksite_id)
     sequence_number = next_invoice_sequence_number(db, context.organization.id)
     line_items, subtotal_amount_cents = compute_billing_line_items(quote.line_items)
     issue_date = date.today()
@@ -2538,7 +2744,7 @@ def read_invoices(
     context: OrganizationAccessContext = Depends(require_billing_read),
     db: Session = Depends(get_db_session),
 ) -> list[InvoiceRead]:
-    worksite_lookup = list_worksite_lookup(context.organization.id)
+    worksite_lookup = list_worksite_lookup(db, context.organization)
     invoices = list_invoices_for_organization(db, context.organization.id)
     return [
         InvoiceRead.model_validate(
@@ -2562,7 +2768,7 @@ def create_invoice(
     db: Session = Depends(get_db_session),
 ) -> InvoiceRead:
     customer = get_billing_customer_or_404(db, context.organization.id, payload.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
     sequence_number = next_invoice_sequence_number(db, context.organization.id)
     line_items, subtotal_amount_cents = compute_billing_line_items(
         [item.model_dump() for item in payload.line_items]
@@ -2634,7 +2840,7 @@ def update_invoice_follow_up_status(
         return InvoiceRead.model_validate(
             serialize_invoice(
                 invoice,
-                worksite_name=get_worksite_name_or_404(context.organization.id, invoice.worksite_id),
+                worksite_name=get_worksite_name_or_404(db, context.organization, invoice.worksite_id),
             )
         )
 
@@ -2663,7 +2869,7 @@ def update_invoice_follow_up_status(
     return InvoiceRead.model_validate(
         serialize_invoice(
             invoice,
-            worksite_name=get_worksite_name_or_404(context.organization.id, invoice.worksite_id),
+            worksite_name=get_worksite_name_or_404(db, context.organization, invoice.worksite_id),
         )
     )
 
@@ -2681,8 +2887,8 @@ def update_invoice(
 ) -> InvoiceRead:
     invoice = get_invoice_or_404(db, context.organization.id, invoice_id)
     customer = get_billing_customer_or_404(db, context.organization.id, payload.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
-    previous_worksite_name = get_worksite_name_or_404(context.organization.id, invoice.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
+    previous_worksite_name = get_worksite_name_or_404(db, context.organization, invoice.worksite_id)
     line_items, subtotal_amount_cents = compute_billing_line_items(
         [item.model_dump() for item in payload.line_items]
     )
@@ -2802,7 +3008,7 @@ def update_invoice_status(
     return InvoiceRead.model_validate(
         serialize_invoice(
             invoice,
-            worksite_name=get_worksite_name_or_404(context.organization.id, invoice.worksite_id),
+            worksite_name=get_worksite_name_or_404(db, context.organization, invoice.worksite_id),
         )
     )
 
@@ -2872,7 +3078,7 @@ def record_invoice_payment(
     return InvoiceRead.model_validate(
         serialize_invoice(
             invoice,
-            worksite_name=get_worksite_name_or_404(context.organization.id, invoice.worksite_id),
+            worksite_name=get_worksite_name_or_404(db, context.organization, invoice.worksite_id),
         )
     )
 
@@ -2889,7 +3095,7 @@ def update_invoice_worksite(
     db: Session = Depends(get_db_session),
 ) -> InvoiceRead:
     invoice = get_invoice_or_404(db, context.organization.id, invoice_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, payload.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, payload.worksite_id)
     if invoice.worksite_id == payload.worksite_id:
         return InvoiceRead.model_validate(serialize_invoice(invoice, worksite_name=worksite_name))
 
@@ -2910,7 +3116,7 @@ def update_invoice_worksite(
                 "to": str(payload.worksite_id) if payload.worksite_id else None,
             },
             "worksite_name": {
-                "from": get_worksite_name_or_404(context.organization.id, previous_worksite_id),
+                "from": get_worksite_name_or_404(db, context.organization, previous_worksite_id),
                 "to": worksite_name,
             },
         },
@@ -2933,7 +3139,7 @@ def download_invoice_pdf(
 ) -> Response:
     invoice = get_invoice_or_404(db, context.organization.id, invoice_id)
     customer = get_billing_customer_or_404(db, context.organization.id, invoice.customer_id)
-    worksite_name = get_worksite_name_or_404(context.organization.id, invoice.worksite_id)
+    worksite_name = get_worksite_name_or_404(db, context.organization, invoice.worksite_id)
     pdf_bytes = build_invoice_pdf(
         context.organization,
         serialize_invoice(invoice, worksite_name=worksite_name),
@@ -2994,7 +3200,7 @@ def list_worksites(
     coordination_index = build_worksite_coordination_index(
         list_worksite_coordination_items(db, context.organization.id)
     )
-    worksites = list_worksite_summaries(context.organization.id)
+    worksites = list_worksite_summaries(db, context.organization)
     return [
         serialize_worksite_summary_read(
             db,
@@ -3006,15 +3212,356 @@ def list_worksites(
     ]
 
 
+@router.post(
+    "/{organization_id}/worksites",
+    response_model=WorksiteSummaryRead,
+)
+def create_worksite(
+    organization_id: UUID,
+    payload: WorksiteCreateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteSummaryRead:
+    worksite_name = normalize_optional_text(payload.name)
+    if worksite_name is None:
+        raise HTTPException(status_code=400, detail="Le nom du chantier est obligatoire.")
+
+    linked_site = get_site_or_404(db, context.organization.id, payload.site_id) if payload.site_id is not None else None
+
+    worksite = Worksite(
+        organization_id=context.organization.id,
+        site_id=linked_site.id if linked_site is not None else None,
+        name=worksite_name,
+        description=normalize_optional_text(payload.description),
+        status=WorksiteStatus(payload.status),
+    )
+    db.add(worksite)
+    db.flush()
+
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.CREATE,
+        target_type="worksite",
+        target_id=worksite.id,
+        target_display=worksite.name,
+        changes={
+            "name": worksite.name,
+            "site_id": str(worksite.site_id) if worksite.site_id is not None else None,
+            "site_name": linked_site.name if linked_site is not None else None,
+            "status": worksite.status.value,
+            "description": worksite.description,
+        },
+    )
+    db.commit()
+    db.refresh(worksite)
+    if linked_site is not None:
+        worksite.site = linked_site
+
+    return serialize_worksite_summary_read(
+        db,
+        context.organization.id,
+        {
+            "id": worksite.id,
+            "organization_id": context.organization.id,
+            "is_persisted": True,
+            "name": worksite.name,
+            "client_name": linked_site.name if linked_site is not None else context.organization.name,
+            "address": linked_site.address if linked_site is not None else (context.organization.headquarters_address or ""),
+            "status": worksite.status.value,
+            "planned_for": worksite.planned_for,
+            "updated_at": worksite.updated_at,
+            "description": worksite.description,
+            "site_id": linked_site.id if linked_site is not None else None,
+            "site_name": linked_site.name if linked_site is not None else None,
+            "interventions": [],
+        },
+    )
+
+
+@router.patch(
+    "/{organization_id}/worksites/{worksite_id}/status",
+    response_model=WorksiteSummaryRead,
+)
+def update_worksite_status(
+    organization_id: UUID,
+    worksite_id: UUID,
+    payload: WorksiteStatusUpdateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteSummaryRead:
+    worksite = get_persisted_worksite_or_404(db, context.organization.id, worksite_id)
+    next_status = WorksiteStatus(payload.status)
+    if worksite.status == next_status:
+        return serialize_worksite_summary_read(
+            db,
+            context.organization.id,
+            serialize_worksite_summary(context.organization, worksite),
+        )
+
+    previous_status = worksite.status
+    worksite.status = next_status
+    worksite.version += 1
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.STATUS_CHANGE,
+        target_type="worksite",
+        target_id=worksite.id,
+        target_display=worksite.name,
+        changes={
+            "status": {
+                "from": previous_status.value,
+                "to": worksite.status.value,
+            }
+        },
+    )
+    db.commit()
+    db.refresh(worksite)
+    if worksite.site is None and worksite.site_id is not None:
+        worksite.site = get_site_or_404(db, context.organization.id, worksite.site_id)
+    return serialize_worksite_summary_read(
+        db,
+        context.organization.id,
+        serialize_worksite_summary(context.organization, worksite),
+    )
+
+
+@router.post(
+    "/{organization_id}/worksites/{worksite_id}/interventions",
+    response_model=WorksiteInterventionRead,
+)
+def create_worksite_intervention(
+    organization_id: UUID,
+    worksite_id: UUID,
+    payload: WorksiteInterventionCreateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteInterventionRead:
+    worksite = get_persisted_worksite_or_404(db, context.organization.id, worksite_id)
+    intervention_type = WorksiteInterventionType(payload.intervention_type)
+    intervention_status = WorksiteInterventionStatus(payload.status)
+    intervention_result = (
+        WorksiteInterventionResult(payload.result)
+        if payload.result is not None
+        else None
+    )
+    if intervention_result is not None and intervention_status != WorksiteInterventionStatus.DONE:
+        intervention_status = WorksiteInterventionStatus.DONE
+    if intervention_status == WorksiteInterventionStatus.DONE and intervention_result is None:
+        intervention_result = WorksiteInterventionResult.COMPLETED
+    assigned_team, assignee_membership = validate_worksite_intervention_payload(
+        db,
+        context.organization.id,
+        team_id=payload.team_id,
+        assignee_user_id=payload.assignee_user_id,
+        status=intervention_status,
+        scheduled_for=payload.scheduled_for,
+    )
+
+    intervention = WorksiteIntervention(
+        organization_id=context.organization.id,
+        worksite_id=worksite.id,
+        intervention_type=intervention_type,
+        status=intervention_status,
+        scheduled_for=payload.scheduled_for,
+        completed_at=payload.completed_at or (datetime.now(timezone.utc) if intervention_status == WorksiteInterventionStatus.DONE else None),
+        result=intervention_result,
+        team_id=assigned_team.id if assigned_team is not None else None,
+        assignee_user_id=assignee_membership.user_id if assignee_membership is not None else None,
+        notes=normalize_optional_text(payload.notes),
+        report_comment=normalize_optional_text(payload.report_comment) if intervention_status == WorksiteInterventionStatus.DONE else None,
+        follow_up_note=normalize_optional_text(payload.follow_up_note) if intervention_status == WorksiteInterventionStatus.DONE else None,
+    )
+    db.add(intervention)
+    db.flush()
+    db.refresh(intervention)
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.CREATE,
+        target_type="worksite_intervention",
+        target_id=intervention.id,
+        target_display=str(worksite.name),
+        changes={
+            "worksite_id": str(worksite.id),
+            "intervention_type": intervention.intervention_type.value,
+            "status": intervention.status.value,
+            "scheduled_for": intervention.scheduled_for.isoformat() if intervention.scheduled_for is not None else None,
+            "completed_at": intervention.completed_at.isoformat() if intervention.completed_at is not None else None,
+            "result": intervention.result.value if intervention.result is not None else None,
+            "team_id": str(intervention.team_id) if intervention.team_id is not None else None,
+            "assignee_user_id": str(intervention.assignee_user_id) if intervention.assignee_user_id is not None else None,
+            "notes": intervention.notes,
+            "report_comment": intervention.report_comment,
+            "follow_up_note": intervention.follow_up_note,
+        },
+    )
+    db.commit()
+    refreshed = resolve_worksite_intervention_or_404(db, context.organization.id, intervention.id)
+    return WorksiteInterventionRead.model_validate(serialize_worksite_intervention(refreshed))
+
+
+@router.patch(
+    "/{organization_id}/worksite-interventions/{intervention_id}",
+    response_model=WorksiteInterventionRead,
+)
+def update_worksite_intervention(
+    organization_id: UUID,
+    intervention_id: UUID,
+    payload: WorksiteInterventionUpdateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteInterventionRead:
+    intervention = resolve_worksite_intervention_or_404(db, context.organization.id, intervention_id)
+    previous_state = serialize_worksite_intervention(intervention)
+
+    next_type = (
+        WorksiteInterventionType(payload.intervention_type)
+        if payload.intervention_type is not None
+        else intervention.intervention_type
+    )
+    next_status = (
+        WorksiteInterventionStatus(payload.status)
+        if payload.status is not None
+        else intervention.status
+    )
+    next_scheduled_for = (
+        payload.scheduled_for
+        if "scheduled_for" in payload.model_fields_set
+        else intervention.scheduled_for
+    )
+    next_completed_at = (
+        payload.completed_at
+        if "completed_at" in payload.model_fields_set
+        else intervention.completed_at
+    )
+    next_result = (
+        WorksiteInterventionResult(payload.result)
+        if payload.result is not None
+        else (None if "result" in payload.model_fields_set else intervention.result)
+    )
+    next_team_id = payload.team_id if "team_id" in payload.model_fields_set else intervention.team_id
+    next_assignee_user_id = (
+        payload.assignee_user_id
+        if "assignee_user_id" in payload.model_fields_set
+        else intervention.assignee_user_id
+    )
+    next_notes = (
+        normalize_optional_text(payload.notes)
+        if "notes" in payload.model_fields_set
+        else intervention.notes
+    )
+    next_report_comment = (
+        normalize_optional_text(payload.report_comment)
+        if "report_comment" in payload.model_fields_set
+        else intervention.report_comment
+    )
+    next_follow_up_note = (
+        normalize_optional_text(payload.follow_up_note)
+        if "follow_up_note" in payload.model_fields_set
+        else intervention.follow_up_note
+    )
+
+    if next_result is not None and next_status != WorksiteInterventionStatus.DONE:
+        next_status = WorksiteInterventionStatus.DONE
+    if next_status == WorksiteInterventionStatus.DONE and next_result is None:
+        next_result = WorksiteInterventionResult.COMPLETED
+    if next_status == WorksiteInterventionStatus.DONE:
+        next_completed_at = next_completed_at or intervention.completed_at or datetime.now(timezone.utc)
+    else:
+        next_completed_at = None
+        next_result = None
+        next_report_comment = None
+        next_follow_up_note = None
+
+    assigned_team, assignee_membership = validate_worksite_intervention_payload(
+        db,
+        context.organization.id,
+        team_id=next_team_id,
+        assignee_user_id=next_assignee_user_id,
+        status=next_status,
+        scheduled_for=next_scheduled_for,
+    )
+
+    intervention.intervention_type = next_type
+    intervention.status = next_status
+    intervention.scheduled_for = next_scheduled_for
+    intervention.completed_at = next_completed_at
+    intervention.result = next_result
+    intervention.team_id = assigned_team.id if assigned_team is not None else None
+    intervention.assignee_user_id = assignee_membership.user_id if assignee_membership is not None else None
+    intervention.notes = next_notes
+    intervention.report_comment = next_report_comment
+    intervention.follow_up_note = next_follow_up_note
+    intervention.version += 1
+
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_intervention",
+        target_id=intervention.id,
+        target_display=str(intervention.worksite_id),
+        changes={
+            "intervention_type": {
+                "from": previous_state["intervention_type"],
+                "to": intervention.intervention_type.value,
+            },
+            "status": {
+                "from": previous_state["status"],
+                "to": intervention.status.value,
+            },
+            "scheduled_for": {
+                "from": previous_state["scheduled_for"],
+                "to": intervention.scheduled_for.isoformat() if intervention.scheduled_for is not None else None,
+            },
+            "completed_at": {
+                "from": previous_state["completed_at"],
+                "to": intervention.completed_at.isoformat() if intervention.completed_at is not None else None,
+            },
+            "result": {
+                "from": previous_state["result"],
+                "to": intervention.result.value if intervention.result is not None else None,
+            },
+            "team_id": {
+                "from": previous_state["team_id"],
+                "to": str(intervention.team_id) if intervention.team_id is not None else None,
+            },
+            "assignee_user_id": {
+                "from": previous_state["assignee_user_id"],
+                "to": str(intervention.assignee_user_id) if intervention.assignee_user_id is not None else None,
+            },
+            "notes": {
+                "from": previous_state["notes"],
+                "to": intervention.notes,
+            },
+            "report_comment": {
+                "from": previous_state["report_comment"],
+                "to": intervention.report_comment,
+            },
+            "follow_up_note": {
+                "from": previous_state["follow_up_note"],
+                "to": intervention.follow_up_note,
+            },
+        },
+    )
+    db.commit()
+    refreshed = resolve_worksite_intervention_or_404(db, context.organization.id, intervention.id)
+    return WorksiteInterventionRead.model_validate(serialize_worksite_intervention(refreshed))
+
+
 @router.get(
     "/{organization_id}/worksite-assignees",
     response_model=list[WorksiteAssigneeRead],
 )
 def list_worksite_assignees(
     organization_id: UUID,
-    context: OrganizationAccessContext = Depends(
-        require_module_enabled(OrganizationModuleCode.CHANTIER, "users:read")
-    ),
+    context: OrganizationAccessContext = Depends(require_chantier_read),
     db: Session = Depends(get_db_session),
 ) -> list[WorksiteAssigneeRead]:
     return [
@@ -3025,6 +3572,234 @@ def list_worksite_assignees(
         )
         for membership in list_active_worksite_assignees(db, context.organization.id)
     ]
+
+
+@router.get(
+    "/{organization_id}/worksite-teams",
+    response_model=list[WorksiteTeamRead],
+)
+def list_chantier_teams(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(require_chantier_read),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteTeamRead]:
+    memberships_by_user_id = {
+        membership.user_id: membership
+        for membership in list_active_worksite_assignees(db, context.organization.id)
+    }
+    return [
+        serialize_worksite_team_read(team, memberships_by_user_id)
+        for team in list_worksite_teams(db, context.organization.id)
+    ]
+
+
+@router.post(
+    "/{organization_id}/worksite-teams/{team_id}/members",
+    response_model=WorksiteTeamRead,
+)
+def add_member_to_worksite_team(
+    organization_id: UUID,
+    team_id: UUID,
+    payload: WorksiteTeamMemberAddRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteTeamRead:
+    team = resolve_worksite_team_or_404(db, context.organization.id, team_id)
+    membership = resolve_worksite_assignee_or_404(db, context.organization.id, payload.user_id)
+    memberships_by_user_id = {
+        item.user_id: item
+        for item in list_active_worksite_assignees(db, context.organization.id)
+    }
+    current_member_ids = {
+        member.user_id
+        for member in team.members
+        if member.deleted_at is None
+    }
+
+    if membership is not None and membership.user_id not in current_member_ids:
+        next_member_ids = current_member_ids | {membership.user_id}
+        db.add(
+            OrganizationTeamMember(
+                team_id=team.id,
+                user_id=membership.user_id,
+            )
+        )
+        team.version += 1
+        record_audit_log(
+            db,
+            organization_id=context.organization.id,
+            actor_user=context.user,
+            action_type=AuditAction.UPDATE,
+            target_type="organization_team",
+            target_id=team.id,
+            target_display=team.name,
+            changes={
+                "member_user_ids": {
+                    "from": sorted(str(user_id) for user_id in current_member_ids),
+                    "to": sorted(str(user_id) for user_id in next_member_ids),
+                },
+                "source": "worksite_coordination",
+            },
+        )
+        db.commit()
+        db.expire_all()
+
+    refreshed_team = resolve_worksite_team_or_404(db, context.organization.id, team_id)
+    return serialize_worksite_team_read(refreshed_team, memberships_by_user_id)
+
+
+@router.get(
+    "/{organization_id}/worksite-equipments",
+    response_model=list[WorksiteEquipmentRead],
+)
+def list_linked_worksite_equipments(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(require_chantier_read),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteEquipmentRead]:
+    return [
+        WorksiteEquipmentRead.model_validate(serialize_worksite_equipment(equipment))
+        for equipment in list_worksite_equipments(db, context.organization.id)
+    ]
+
+
+@router.post(
+    "/{organization_id}/worksite-equipments",
+    response_model=WorksiteEquipmentRead,
+)
+def create_linked_worksite_equipment(
+    organization_id: UUID,
+    payload: WorksiteEquipmentCreateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteEquipmentRead:
+    name = payload.name.strip()
+    equipment_type = payload.type.strip()
+
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Le nom d’équipement est trop court.")
+    if len(equipment_type) < 2:
+        raise HTTPException(status_code=400, detail="Le type d’équipement est trop court.")
+
+    equipment = create_worksite_equipment(
+        db,
+        context.organization.id,
+        name=name,
+        equipment_type=equipment_type,
+        status=WorksiteEquipmentStatus(payload.status),
+    )
+
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.CREATE,
+        target_type="worksite_equipment",
+        target_id=equipment.id,
+        target_display=equipment.name,
+        changes={
+            "name": equipment.name,
+            "type": equipment.equipment_type,
+            "status": equipment.status.value,
+        },
+    )
+    db.commit()
+    db.refresh(equipment)
+    return WorksiteEquipmentRead.model_validate(serialize_worksite_equipment(equipment))
+
+
+@router.get(
+    "/{organization_id}/worksite-equipment-movements",
+    response_model=list[WorksiteEquipmentMovementRead],
+)
+def list_linked_worksite_equipment_movements(
+    organization_id: UUID,
+    context: OrganizationAccessContext = Depends(require_chantier_read),
+    db: Session = Depends(get_db_session),
+) -> list[WorksiteEquipmentMovementRead]:
+    return [
+        WorksiteEquipmentMovementRead.model_validate(serialize_worksite_equipment_movement(movement))
+        for movement in list_worksite_equipment_movements(db, context.organization.id)
+    ]
+
+
+@router.post(
+    "/{organization_id}/worksites/{worksite_id}/equipment-movements",
+    response_model=WorksiteEquipmentMovementRead,
+)
+def record_worksite_equipment_movement(
+    organization_id: UUID,
+    worksite_id: UUID,
+    payload: WorksiteEquipmentMovementCreateRequest,
+    context: OrganizationAccessContext = Depends(require_chantier_write),
+    db: Session = Depends(get_db_session),
+) -> WorksiteEquipmentMovementRead:
+    worksite = get_persisted_worksite_or_404(db, context.organization.id, worksite_id)
+    equipment = get_worksite_equipment(db, context.organization.id, payload.equipment_id)
+    if equipment is None:
+        raise HTTPException(status_code=404, detail="Équipement chantier introuvable pour cette organisation.")
+
+    movement_type = WorksiteEquipmentMovementType(payload.movement_type)
+    resulting_status = WorksiteEquipmentStatus(payload.resulting_status)
+
+    if movement_type == WorksiteEquipmentMovementType.REMOVED_FROM_WORKSITE and equipment.worksite_id != worksite.id:
+        raise HTTPException(status_code=400, detail="Cet équipement n'est pas actuellement affecté à ce chantier.")
+
+    if movement_type == WorksiteEquipmentMovementType.MARKED_DAMAGED and equipment.worksite_id != worksite.id:
+        raise HTTPException(status_code=400, detail="Un équipement doit être affecté au chantier avant de passer en attention.")
+    if movement_type == WorksiteEquipmentMovementType.MARKED_DAMAGED and resulting_status == WorksiteEquipmentStatus.READY:
+        raise HTTPException(status_code=400, detail="Un équipement endommagé doit rester en attention ou indisponible.")
+
+    previous_worksite_id = equipment.worksite_id
+    previous_status = equipment.status
+
+    if movement_type == WorksiteEquipmentMovementType.ASSIGNED_TO_WORKSITE:
+        equipment.worksite_id = worksite.id
+    elif movement_type == WorksiteEquipmentMovementType.REMOVED_FROM_WORKSITE:
+        equipment.worksite_id = None
+
+    equipment.status = resulting_status
+    equipment.version += 1
+
+    movement = WorksiteEquipmentMovement(
+        organization_id=context.organization.id,
+        worksite_id=worksite.id,
+        equipment_id=equipment.id,
+        movement_type=movement_type,
+        resulting_status=resulting_status,
+        actor_user_id=context.user.id,
+        actor_display_name=context.user.display_name or context.user.email,
+        sync_status="synced",
+    )
+    db.add(movement)
+    db.flush()
+    db.refresh(movement)
+
+    record_audit_log(
+        db,
+        organization_id=context.organization.id,
+        actor_user=context.user,
+        action_type=AuditAction.UPDATE,
+        target_type="worksite_equipment",
+        target_id=equipment.id,
+        target_display=equipment.name,
+        changes={
+            "movement_type": movement_type.value,
+            "worksite_id": {
+                "from": str(previous_worksite_id) if previous_worksite_id is not None else None,
+                "to": str(equipment.worksite_id) if equipment.worksite_id is not None else None,
+            },
+            "status": {
+                "from": previous_status.value,
+                "to": resulting_status.value,
+            },
+            "target_worksite_id": str(worksite.id),
+        },
+    )
+
+    db.commit()
+    db.refresh(movement)
+    return WorksiteEquipmentMovementRead.model_validate(serialize_worksite_equipment_movement(movement))
 
 
 @router.get(
@@ -3040,15 +3815,20 @@ def list_linked_worksite_documents(
         list_worksite_coordination_items(db, context.organization.id)
     )
     documents = list_worksite_documents(db, context.organization.id)
-    return [
-        serialize_worksite_document_read(
-            db,
-            context.organization.id,
-            document,
-            coordination_index=coordination_index,
+    visible_documents: list[WorksiteDocumentRead] = []
+    for document in documents:
+        worksite_name = get_worksite_name(db, context.organization, document.attached_to_entity_id)
+        if worksite_name is None:
+            continue
+        visible_documents.append(
+            serialize_worksite_document_read(
+                db,
+                context.organization.id,
+                document,
+                coordination_index=coordination_index,
+            )
         )
-        for document in documents
-    ]
+    return visible_documents
 
 
 @router.get(
@@ -3063,16 +3843,20 @@ def list_linked_worksite_signatures(
     db: Session = Depends(get_db_session),
 ) -> list[WorksiteSignatureRead]:
     signatures = list_worksite_signatures(db, context.organization.id)
-    return [
-        WorksiteSignatureRead.model_validate(
-            serialize_worksite_signature(
-                signature,
-                worksite_name=get_worksite_name_or_404(context.organization.id, signature.attached_to_entity_id)
-                or "Chantier",
+    visible_signatures: list[WorksiteSignatureRead] = []
+    for signature in signatures:
+        worksite_name = get_worksite_name(db, context.organization, signature.attached_to_entity_id)
+        if worksite_name is None:
+            continue
+        visible_signatures.append(
+            WorksiteSignatureRead.model_validate(
+                serialize_worksite_signature(
+                    signature,
+                    worksite_name=worksite_name,
+                )
             )
         )
-        for signature in signatures
-    ]
+    return visible_signatures
 
 
 @router.get(
@@ -3087,16 +3871,20 @@ def list_linked_worksite_proofs(
     db: Session = Depends(get_db_session),
 ) -> list[WorksiteProofRead]:
     proofs = list_worksite_proofs(db, context.organization.id)
-    return [
-        WorksiteProofRead.model_validate(
-            serialize_worksite_proof(
-                proof,
-                worksite_name=get_worksite_name_or_404(context.organization.id, proof.attached_to_entity_id)
-                or "Chantier",
+    visible_proofs: list[WorksiteProofRead] = []
+    for proof in proofs:
+        worksite_name = get_worksite_name(db, context.organization, proof.attached_to_entity_id)
+        if worksite_name is None:
+            continue
+        visible_proofs.append(
+            WorksiteProofRead.model_validate(
+                serialize_worksite_proof(
+                    proof,
+                    worksite_name=worksite_name,
+                )
             )
         )
-        for proof in proofs
-    ]
+    return visible_proofs
 
 
 @router.patch(
@@ -3275,18 +4063,35 @@ def update_worksite_coordination(
     context: OrganizationAccessContext = Depends(require_chantier_write),
     db: Session = Depends(get_db_session),
 ) -> WorksiteSummaryRead:
-    worksite = get_worksite_summary(context.organization.id, worksite_id)
+    worksite = get_worksite_summary(db, context.organization, worksite_id)
     if worksite is None:
         raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
 
     if payload.status not in WORKSITE_COORDINATION_STATUSES:
         raise HTTPException(status_code=400, detail="Statut de suivi chantier invalide.")
 
+    assigned_team = resolve_worksite_team_or_404(
+        db,
+        context.organization.id,
+        payload.team_id,
+    )
     assignee_membership = resolve_worksite_assignee_or_404(
         db,
         context.organization.id,
         payload.assignee_user_id,
     )
+    if assigned_team is not None and assignee_membership is not None:
+        team_member_user_ids = {
+            member.user_id
+            for member in assigned_team.members
+            if member.deleted_at is None
+        }
+        if assignee_membership.user_id not in team_member_user_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Le référent choisi doit appartenir à l'équipe affectée.",
+            )
+
     item = ensure_worksite_coordination_item(
         db,
         context.organization.id,
@@ -3301,6 +4106,7 @@ def update_worksite_coordination(
     )
 
     item.status = payload.status
+    item.team_id = assigned_team.id if assigned_team is not None else None
     item.assignee_user_id = assignee_membership.user_id if assignee_membership is not None else None
     item.comment_text = next_comment_text
     item.version += 1
@@ -3314,6 +4120,10 @@ def update_worksite_coordination(
         target_display=str(worksite["name"]),
         changes={
             "status": {"from": previous_state["status"], "to": payload.status},
+            "team_id": {
+                "from": previous_state["team_id"],
+                "to": str(assigned_team.id) if assigned_team is not None else None,
+            },
             "assignee_user_id": {
                 "from": previous_state["assignee_user_id"],
                 "to": str(assignee_membership.user_id) if assignee_membership is not None else None,
@@ -3326,7 +4136,7 @@ def update_worksite_coordination(
     )
     db.commit()
     db.refresh(item)
-    refreshed_worksite = get_worksite_summary(context.organization.id, worksite_id)
+    refreshed_worksite = get_worksite_summary(db, context.organization, worksite_id)
     if refreshed_worksite is None:
         raise HTTPException(status_code=404, detail="Chantier introuvable pour cette organisation.")
     return serialize_worksite_summary_read(db, context.organization.id, refreshed_worksite)

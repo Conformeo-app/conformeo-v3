@@ -34,30 +34,24 @@ import type { CfmButtonVariant } from "../types";
         display: inline-flex;
         justify-content: center;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.34rem;
         border: 0;
-        border-radius: var(--cfm-radius-pill, 999px);
-        padding: 0.92rem 1.28rem;
+        border-radius: var(--cfm-radius-pill, 9px);
+        padding: 0.72rem 1rem;
         font: inherit;
-        font-weight: 700;
+        font-weight: var(--cfm-font-weight-medium, 500);
         letter-spacing: 0.01em;
         cursor: pointer;
-        box-shadow:
-          0 10px 24px rgba(18, 33, 42, 0.08),
-          0 1px 0 rgba(255, 255, 255, 0.32) inset;
+        box-shadow: none;
         transition:
-          transform 140ms ease,
           opacity 140ms ease,
           background-color 140ms ease,
-          box-shadow 140ms ease,
-          border-color 140ms ease;
+          color 140ms ease,
+          transform 140ms ease;
       }
 
       .button:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow:
-          0 14px 30px rgba(18, 33, 42, 0.12),
-          0 1px 0 rgba(255, 255, 255, 0.36) inset;
+        transform: translateY(-1px);
       }
 
       .button:active:not(:disabled) {
@@ -65,8 +59,8 @@ import type { CfmButtonVariant } from "../types";
       }
 
       .button[data-size="sm"] {
-        padding: 0.65rem 0.95rem;
-        font-size: 0.92rem;
+        padding: 0.55rem 0.8rem;
+        font-size: 0.84rem;
       }
 
       .button[data-block] {
@@ -75,29 +69,31 @@ import type { CfmButtonVariant } from "../types";
 
       .button[data-variant="primary"] {
         color: #ffffff;
-        background:
-          linear-gradient(135deg, color-mix(in srgb, var(--cfm-color-primary, #1d6d64) 94%, #ffffff 6%), #154f49);
+        background: var(--cfm-gradient-primary, linear-gradient(135deg, #0a1128 0%, #141a32 100%));
+        box-shadow: var(--cfm-shadow-soft, 0 10px 20px rgba(10, 17, 40, 0.03));
       }
 
       .button[data-variant="secondary"] {
-        color: var(--cfm-color-ink, #18323e);
-        background: linear-gradient(180deg, #ffffff, var(--cfm-color-surface-muted, #d9e4e7));
-        border: 1px solid color-mix(in srgb, var(--cfm-color-border, #bfd3cf) 78%, transparent);
+        color: var(--cfm-color-secondary-ink, #53340c);
+        background: var(--cfm-gradient-brass, linear-gradient(135deg, #ffe9bc 0%, #ffdea5 100%));
+        box-shadow: var(--cfm-shadow-soft, 0 10px 20px rgba(10, 17, 40, 0.03));
       }
 
       .button[data-variant="ghost"] {
-        color: var(--cfm-color-primary, #1d6d64);
-        background: rgba(255, 255, 255, 0.52);
-        border: 1px solid var(--cfm-color-border, #bfd3cf);
+        color: var(--cfm-color-primary, #0a1128);
+        background: rgba(255, 255, 255, 0.58);
+        outline: 1px solid var(--cfm-color-outline-ghost, rgba(70, 70, 77, 0.2));
+        outline-offset: -1px;
       }
 
       .button[data-variant="danger"] {
         color: #ffffff;
-        background: linear-gradient(135deg, var(--cfm-color-danger, #b03d2e), #8a2d2d);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--cfm-color-danger, #ba1a1a) 92%, #0a1128), var(--cfm-color-danger, #ba1a1a));
+        box-shadow: var(--cfm-shadow-soft, 0 10px 20px rgba(10, 17, 40, 0.03));
       }
 
       .button:disabled {
-        opacity: 0.64;
+        opacity: 0.55;
         cursor: wait;
         transform: none;
         box-shadow: none;

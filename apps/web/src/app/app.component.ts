@@ -39,6 +39,7 @@ import type {
   QuoteStatus,
   WorksiteApiSummary,
   WorksiteAssigneeRecord,
+  WorksiteCreateRequest,
   WorksiteCoordinationRecord,
   WorksiteCoordinationStatus,
   WorksiteDocumentRecord,
@@ -65,12 +66,14 @@ import {
   updateOrganizationModule
 } from "./auth-client";
 import { ApiClientError } from "./api-error";
+import { canActOnModule, canReadModule, getEnabledModuleCodes, getModuleAccessLevel } from "./desktop-access.utils";
 import {
   createBillingCustomer,
   createBuildingSafetyItem,
   createDuerpEntry,
   createInvoice,
   createOrganizationSite,
+  createWorksite as createWorksiteRequest,
   createQuote,
   createRegulatoryEvidence,
   duplicateQuoteToInvoice,
@@ -125,7 +128,14 @@ import {
   type WorkspaceTemplateName,
 } from "./desktop-shell-context";
 import { DESKTOP_LOGIN_PAGE_CONTEXT } from "./desktop-login-page-context";
-import { DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT } from "./desktop-worksite-documents-page-context";
+import { DESKTOP_REGULATION_PAGE_CONTEXT } from "./desktop-regulation-page-context";
+import {
+  type DesktopWorksiteCreateDraft,
+  type DesktopWorksiteLinkedAssetItem,
+  type DesktopWorksitePageItem,
+} from "./desktop-worksites.legacy-models";
+import { DesktopBillingStateService } from "./desktop-billing-state.service";
+import { DesktopSessionStateService } from "./desktop-session-state.service";
 import { generatedEnv } from "../environments/generated-env";
 
 type HasEmployeesValue = "" | "yes" | "no";
@@ -430,7 +440,7 @@ type DashboardCustomerOverviewItem = {
       useExisting: forwardRef(() => AppComponent),
     },
     {
-      provide: DESKTOP_WORKSITE_DOCUMENTS_PAGE_CONTEXT,
+      provide: DESKTOP_REGULATION_PAGE_CONTEXT,
       useExisting: forwardRef(() => AppComponent),
     },
   ],
@@ -1794,6 +1804,7 @@ type DashboardCustomerOverviewItem = {
             <ng-container *ngIf="regulatoryShowcaseSummary as summary">
               <section class="regulatory-showcase-workspace">
                 <cfm-card
+                  id="reg-synthese-section"
                   class="desktop-card regulatory-showcase-card"
                   eyebrow="Réglementation"
                   title="Copilote conformité"
@@ -1818,7 +1829,7 @@ type DashboardCustomerOverviewItem = {
                         <p class="small" *ngIf="summary.context">{{ summary.context }}</p>
                       </div>
 
-                      <div class="inline-actions">
+                      <div class="inline-actions" id="reg-exports-section">
                         <cfm-button
                           *ngIf="topRegulatoryPriority as topPriority"
                           type="button"
@@ -3149,6 +3160,7 @@ type DashboardCustomerOverviewItem = {
 
           <ng-container *ngIf="shouldShowWorkspaceContent && currentMembership && isFacturationEnabled">
             <cfm-card
+              id="billing-customers-section"
               class="desktop-card"
               eyebrow="S3-001"
               title="Clients"
@@ -3317,6 +3329,7 @@ type DashboardCustomerOverviewItem = {
               </ng-template>
             </cfm-card>
 
+            <div id="billing-relances-section"></div>
             <cfm-card
               id="billing-quote-card"
               class="desktop-card"
@@ -3781,6 +3794,7 @@ type DashboardCustomerOverviewItem = {
               </ng-template>
             </cfm-card>
 
+            <div id="billing-exports-section"></div>
             <cfm-card
               id="billing-invoice-card"
               class="desktop-card"
@@ -6021,6 +6035,8 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   private static readonly WORKSPACE_DEBUG_ONLY_LABEL: string | null = null;
   private static readonly DISABLE_DEFERRED_WORKSPACE_SCROLL = false;
   private readonly router = inject(Router);
+  private readonly desktopBillingState = inject(DesktopBillingStateService);
+  private readonly desktopSessionState = inject(DesktopSessionStateService);
   email = "";
   password = "";
   loading = false;
@@ -6037,12 +6053,15 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   private workspaceRefreshScheduledReason: string | null = null;
   private workspaceHydratedOrganizationId: string | null = null;
   private workspaceSegmentIssues: Partial<Record<string, string>> = {};
+  private workspaceLoadedSegments: Partial<Record<string, boolean>> = {};
   regulatoryExporting = false;
   organizationProfileSaving = false;
   organizationSiteSaving = false;
   organizationSiteStatusBusyId: string | null = null;
   organizationSiteEnrichmentBusyId: string | null = null;
   homeSiteQuickCreateOpen = false;
+  worksiteCreateOpen = false;
+  worksiteCreateSaving = false;
   organizationProfile: OrganizationRecord | null = null;
   organizationSites: OrganizationSiteRecord[] = [];
   regulatoryProfile: OrganizationRegulatoryProfileRecord | null = null;
@@ -6050,8 +6069,6 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   customerSaving = false;
   customerEditingId: string | null = null;
   customerSearchTerm = "";
-  billingCustomers: BillingCustomerRecord[] = [];
-  billingWorksites: WorksiteApiSummary[] = [];
   worksiteDocuments: WorksiteDocumentRecord[] = [];
   worksiteProofs: WorksiteProofRecord[] = [];
   worksiteSignatures: WorksiteSignatureRecord[] = [];
@@ -6081,6 +6098,12 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     measurePoints: "",
     additionalContact: "",
   };
+  worksiteCreateForm: DesktopWorksiteCreateDraft = {
+    name: "",
+    siteId: "",
+    status: "planned",
+    description: "",
+  };
   private worksitePreventionPlanInitialForm: WorksitePreventionPlanForm | null = null;
   private billingDraftsHydratedScope: string | null = null;
   private quoteDraftSnapshot = "";
@@ -6096,7 +6119,6 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   quoteHistoryBusyId: string | null = null;
   quoteHistoryOpenId: string | null = null;
   quoteHistoryById: Record<string, AuditLogRecord[]> = {};
-  quotes: QuoteRecord[] = [];
   invoiceSaving = false;
   invoiceEditingSaving = false;
   invoiceEditingId: string | null = null;
@@ -6109,7 +6131,6 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   invoiceHistoryBusyId: string | null = null;
   invoiceHistoryOpenId: string | null = null;
   invoiceHistoryById: Record<string, AuditLogRecord[]> = {};
-  invoices: InvoiceRecord[] = [];
   cockpitSummary: CockpitSummaryRecord | null = null;
   buildingSafetySaving = false;
   buildingSafetyStatusBusyId: string | null = null;
@@ -6348,20 +6369,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   }
 
   get activeSessionModules(): ModuleCode[] {
-    const membership = this.currentMembership;
-
-    if (!membership) {
-      return [];
-    }
-
-    const modulesFromEnabledList = membership.enabled_modules ?? [];
-    const modulesFromRecords =
-      membership.modules
-        ?.filter((module) => module.is_enabled)
-        .map((module) => module.module_code)
-      ?? [];
-
-    return Array.from(new Set([...modulesFromEnabledList, ...modulesFromRecords]));
+    return getEnabledModuleCodes(this.currentMembership);
   }
 
   get shouldRenderLoginScreen(): boolean {
@@ -6384,6 +6392,38 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     return this.currentMembership?.permissions.includes("users:read") ?? false;
   }
 
+  get billingCustomers(): BillingCustomerRecord[] {
+    return this.desktopBillingState.customers;
+  }
+
+  set billingCustomers(value: BillingCustomerRecord[]) {
+    this.desktopBillingState.setCustomers(value);
+  }
+
+  get billingWorksites(): WorksiteApiSummary[] {
+    return this.desktopBillingState.worksites;
+  }
+
+  set billingWorksites(value: WorksiteApiSummary[]) {
+    this.desktopBillingState.setWorksites(value);
+  }
+
+  get quotes(): QuoteRecord[] {
+    return this.desktopBillingState.quotes;
+  }
+
+  set quotes(value: QuoteRecord[]) {
+    this.desktopBillingState.setQuotes(value);
+  }
+
+  get invoices(): InvoiceRecord[] {
+    return this.desktopBillingState.invoices;
+  }
+
+  set invoices(value: InvoiceRecord[]) {
+    this.desktopBillingState.setInvoices(value);
+  }
+
   get desktopNavigationItems(): Array<{ route: string; label: string; tone: CfmTone }> {
     const items: Array<{ route: string; label: string; tone: CfmTone }> = [
       { route: "/app/home", label: "Cockpit", tone: "calm" },
@@ -6394,9 +6434,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     }
 
     if (this.isChantierEnabled) {
-      items.push({ route: "/app/chantier", label: "Chantier", tone: "calm" });
-      items.push({ route: "/app/chantier/documents", label: "Documents", tone: "neutral" });
-      items.push({ route: "/app/chantier/coordination", label: "Coordination", tone: "progress" });
+      items.push({ route: "/app/chantiers", label: "Chantiers", tone: "calm" });
     }
 
     if (this.isFacturationEnabled) {
@@ -6407,15 +6445,27 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   }
 
   get isReglementationEnabled(): boolean {
-    return this.activeSessionModules.includes("reglementation");
+    return canReadModule(this.currentMembership, "reglementation");
   }
 
   get isFacturationEnabled(): boolean {
-    return this.activeSessionModules.includes("facturation");
+    return canReadModule(this.currentMembership, "facturation");
   }
 
   get isChantierEnabled(): boolean {
-    return this.activeSessionModules.includes("chantier");
+    return canReadModule(this.currentMembership, "chantier");
+  }
+
+  get regulationAccessLevel() {
+    return getModuleAccessLevel(this.currentMembership, "reglementation");
+  }
+
+  get canActOnReglementation(): boolean {
+    return canActOnModule(this.currentMembership, "reglementation");
+  }
+
+  get canExportReglementation(): boolean {
+    return this.canActOnReglementation;
   }
 
   get homeUsedModuleCodes(): ModuleCode[] {
@@ -6939,6 +6989,74 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     return `${count} élément${count > 1 ? "s" : ""} à traiter`;
   }
 
+  private resolveWorksiteLinkedSite(worksite: WorksiteApiSummary): OrganizationSiteRecord | null {
+    if (!worksite.site_id) {
+      return null;
+    }
+    return this.organizationSites.find((site) => site.id === worksite.site_id) ?? null;
+  }
+
+  private buildWorksiteTemporalLabel(worksite: WorksiteApiSummary): string {
+    const plannedLabel = this.formatCompactDate(worksite.planned_for);
+    const updatedLabel = this.formatCompactDate(worksite.updated_at);
+
+    if (plannedLabel) {
+      return updatedLabel
+        ? `Prévu le ${plannedLabel} · mis à jour le ${updatedLabel}`
+        : `Prévu le ${plannedLabel}`;
+    }
+    if (updatedLabel) {
+      return `Mis à jour le ${updatedLabel}`;
+    }
+    return "Repère temporel à préciser";
+  }
+
+  private buildWorksiteCompletionState(
+    worksiteId: string,
+    linkedSite: OrganizationSiteRecord | null,
+  ): { label: string; tone: CfmTone; detail: string; nextActionLabel: string } {
+    const documentsCount = this.worksiteDocuments.filter((document) => document.worksite_id === worksiteId).length;
+    const proofsCount = this.worksiteProofs.filter((proof) => proof.worksite_id === worksiteId).length;
+    const signaturesCount = this.worksiteSignatures.filter((signature) => signature.worksite_id === worksiteId).length;
+    const assetCount = documentsCount + proofsCount + signaturesCount;
+
+    if (!linkedSite && assetCount === 0) {
+      return {
+        label: "À compléter",
+        tone: "calm",
+        detail: "Ni site lié ni document utile pour le moment. La base terrain reste à compléter.",
+        nextActionLabel: "Lier un site ou générer une première fiche",
+      };
+    }
+
+    if (documentsCount === 0) {
+      return {
+        label: "Base prête",
+        tone: "progress",
+        detail: linkedSite
+          ? "Le chantier est relié au terrain, mais aucun document n’a encore été généré."
+          : "Le chantier existe, mais sa base documentaire reste à lancer.",
+        nextActionLabel: "Générer la première fiche chantier",
+      };
+    }
+
+    if (proofsCount === 0 && signaturesCount === 0) {
+      return {
+        label: "À vérifier",
+        tone: "warning",
+        detail: "Les documents existent, mais les preuves ou signatures restent partielles.",
+        nextActionLabel: "Voir les documents liés",
+      };
+    }
+
+    return {
+      label: "Documenté",
+      tone: "success",
+      detail: "Le chantier dispose déjà d’éléments concrets pour préparer ou démontrer l’intervention.",
+      nextActionLabel: "Ouvrir les éléments liés",
+    };
+  }
+
   isWorksiteDocumentDownloadBusy(document: DashboardWorksiteDocumentItem): boolean {
     return this.worksiteDocumentDownloadBusyId === document.id;
   }
@@ -7005,14 +7123,14 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.selectedWorksiteDocumentLifecycleFilter = "all";
     this.selectedWorksiteDocumentDetailId = null;
     this.feedbackMessage = "Documents chantier filtrés sur la zone utile.";
-    void this.navigateToWorkspaceRoute("/app/chantier/documents", "worksite-documents-section");
+    void this.navigateToWorkspaceRoute(`/app/chantiers/${worksiteId}/documents`);
   }
 
   openCoordinationTodoItem(item: DashboardCoordinationTodoItem): void {
     if (item.kind === "worksite") {
       this.selectedWorksiteCoordinationId = item.worksiteId;
       this.feedbackMessage = "Chantier ouvert sur la coordination utile.";
-      void this.navigateToWorkspaceRoute("/app/chantier", "worksite-overview-section");
+      void this.navigateToWorkspaceRoute(`/app/chantiers/${item.worksiteId}/coordination`);
       return;
     }
 
@@ -7022,7 +7140,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.selectedWorksiteDocumentLifecycleFilter = "all";
       this.selectedWorksiteDocumentDetailId = item.documentId;
       this.feedbackMessage = "Document chantier ouvert sur la zone utile.";
-      void this.navigateToWorkspaceRoute("/app/chantier/documents", "worksite-documents-section");
+      void this.navigateToWorkspaceRoute(`/app/chantiers/${item.worksiteId}/documents`);
     }
   }
 
@@ -7247,14 +7365,16 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return this.localDashboardKpis;
     }
 
-    return this.cockpitSummary.kpis.map((kpi) => ({
-      id: kpi.id,
-      label: kpi.label,
-      value: kpi.value,
-      detail: kpi.detail,
-      statusLabel: kpi.status_label,
-      tone: this.mapCockpitTone(kpi.tone),
-    }));
+    return this.cockpitSummary.kpis
+      .filter((kpi) => this.canReadHomeModule(this.getCockpitModuleCodeFromKpiId(kpi.id)))
+      .map((kpi) => ({
+        id: kpi.id,
+        label: kpi.label,
+        value: kpi.value,
+        detail: kpi.detail,
+        statusLabel: kpi.status_label,
+        tone: this.mapCockpitTone(kpi.tone),
+      }));
   }
 
   get dashboardAlerts(): DashboardAlertItem[] {
@@ -7262,14 +7382,16 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return this.localDashboardAlerts;
     }
 
-    return this.cockpitSummary.alerts.map((alert) => ({
-      id: alert.id,
-      title: alert.title,
-      description: alert.description,
-      moduleLabel: alert.module_label,
-      tone: this.mapCockpitTone(alert.tone),
-      priority: alert.priority,
-    }));
+    return this.cockpitSummary.alerts
+      .filter((alert) => this.canReadHomeModule(this.getCockpitModuleCodeFromLabel(alert.module_label)))
+      .map((alert) => ({
+        id: alert.id,
+        title: alert.title,
+        description: alert.description,
+        moduleLabel: alert.module_label,
+        tone: this.mapCockpitTone(alert.tone),
+        priority: alert.priority,
+      }));
   }
 
   get dashboardEnterpriseOverviewCards(): DashboardPerspectiveCard[] {
@@ -7277,19 +7399,59 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return this.localDashboardEnterpriseOverviewCards;
     }
 
-    return this.cockpitSummary.module_cards.map((card) => ({
-      id: card.id,
-      label: card.label,
-      headline: card.headline,
-      detail: card.detail,
-      highlights: card.highlights.map((highlight) => ({
-        id: highlight.id,
-        label: highlight.label,
-        value: highlight.value,
-      })),
-      statusLabel: card.status_label,
-      tone: this.mapCockpitTone(card.tone),
-    }));
+    return this.cockpitSummary.module_cards
+      .filter((card) => this.canReadHomeModule(this.getCockpitModuleCodeFromLabel(card.label)))
+      .map((card) => ({
+        id: card.id,
+        label: card.label,
+        headline: card.headline,
+        detail: card.detail,
+        highlights: card.highlights.map((highlight) => ({
+          id: highlight.id,
+          label: highlight.label,
+          value: highlight.value,
+        })),
+        statusLabel: card.status_label,
+        tone: this.mapCockpitTone(card.tone),
+      }));
+  }
+
+  private canReadHomeModule(moduleCode: ModuleCode | null): boolean {
+    return moduleCode === null || canReadModule(this.currentMembership, moduleCode);
+  }
+
+  private getCockpitModuleCodeFromKpiId(id: string): ModuleCode | null {
+    if (id.startsWith("quotes-") || id.startsWith("invoices-")) {
+      return "facturation";
+    }
+
+    if (id.startsWith("regulation-")) {
+      return "reglementation";
+    }
+
+    if (id.startsWith("worksites-")) {
+      return "chantier";
+    }
+
+    return null;
+  }
+
+  private getCockpitModuleCodeFromLabel(label: string): ModuleCode | null {
+    const normalizedLabel = label.trim().toLowerCase();
+
+    if (normalizedLabel.includes("réglementation") || normalizedLabel.includes("reglementation")) {
+      return "reglementation";
+    }
+
+    if (normalizedLabel.includes("chantier")) {
+      return "chantier";
+    }
+
+    if (normalizedLabel.includes("facturation")) {
+      return "facturation";
+    }
+
+    return null;
   }
 
   get dashboardActions(): DashboardActionItem[] {
@@ -7843,6 +8005,76 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       );
   }
 
+  get worksiteStatusOptions(): Array<{ value: WorksiteApiSummary["status"]; label: string; tone: CfmTone }> {
+    return [
+      { value: "planned", label: this.getWorksiteStatusLabel("planned"), tone: this.getWorksiteStatusTone("planned") },
+      {
+        value: "in_progress",
+        label: this.getWorksiteStatusLabel("in_progress"),
+        tone: this.getWorksiteStatusTone("in_progress"),
+      },
+      { value: "blocked", label: this.getWorksiteStatusLabel("blocked"), tone: this.getWorksiteStatusTone("blocked") },
+      { value: "completed", label: this.getWorksiteStatusLabel("completed"), tone: this.getWorksiteStatusTone("completed") },
+    ];
+  }
+
+  get worksiteItems(): DesktopWorksitePageItem[] {
+    return this.dashboardWorksiteOverviewItems.map((item) => {
+      const worksite = this.billingWorksites.find((entry) => entry.id === item.id);
+      const linkedSite = worksite ? this.resolveWorksiteLinkedSite(worksite) : null;
+      const documents = item.worksiteDocuments.slice(0, 3).map((document) => ({
+        id: document.id,
+        label: document.title,
+        detail: `${document.fileName} · ${document.lifecycleStatusLabel}`,
+        statusLabel: document.technicalStatusLabel,
+        statusTone: document.technicalStatusTone,
+      }));
+      const proofRecords = this.getWorksiteProofOptions(item.id);
+      const signatureRecords = this.getWorksiteSignatureOptions(item.id);
+      const proofs = proofRecords.slice(0, 3).map((proof) => this.mapWorksiteProofPageItem(proof));
+      const signatures = signatureRecords.slice(0, 3).map((signature) => this.mapWorksiteSignaturePageItem(signature));
+      const siteEnrichmentState = linkedSite ? this.getSiteEnrichmentUiState(linkedSite) : null;
+      const completion = this.buildWorksiteCompletionState(item.id, linkedSite);
+      const temporalLabel = worksite ? this.buildWorksiteTemporalLabel(worksite) : item.operationalSummary;
+
+      return {
+        id: item.id,
+        name: item.name,
+        description: worksite?.description ?? null,
+        statusLabel: item.statusLabel,
+        statusTone: item.statusTone,
+        signalLabel: item.signalLabel,
+        signalTone: item.signalTone,
+        temporalLabel,
+        siteId: worksite?.site_id ?? linkedSite?.id ?? null,
+        siteName: worksite?.site_name ?? linkedSite?.name ?? null,
+        siteAddress: linkedSite?.address ?? (worksite?.address || null),
+        siteTypeLabel: linkedSite ? this.getSiteTypeLabel(linkedSite.site_type) : null,
+        siteEnrichmentState,
+        summary: item.summary,
+        completionLabel: completion.label,
+        completionTone: completion.tone,
+        completionDetail: completion.detail,
+        nextActionLabel: completion.nextActionLabel,
+        coordinationLabel: item.coordination.statusLabel,
+        coordinationTone: item.coordination.statusTone,
+        coordinationDetail: item.coordination.assigneeLabel,
+        documentsCountLabel: item.worksiteDocumentsCount > 0
+          ? `${item.worksiteDocumentsCount} document${item.worksiteDocumentsCount > 1 ? "s" : ""}`
+          : "Aucun document",
+        proofsCountLabel: proofRecords.length > 0
+          ? `${proofRecords.length} preuve${proofRecords.length > 1 ? "s" : ""}`
+          : "Aucune preuve",
+        signaturesCountLabel: signatureRecords.length > 0
+          ? `${signatureRecords.length} signature${signatureRecords.length > 1 ? "s" : ""}`
+          : "Aucune signature",
+        documents,
+        proofs,
+        signatures,
+      };
+    });
+  }
+
   get dashboardCustomerOverviewItems(): DashboardCustomerOverviewItem[] {
     if (!this.isFacturationEnabled) {
       return [];
@@ -8282,6 +8514,27 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     return Math.max(18, Math.min(96, Math.round(score)));
   }
 
+  get regulatoryCriticalCount(): number {
+    const siteCriticalCount = this.activeOrganizationSites.filter((site) =>
+      site.location_enrichment_status === "failed" || site.location_enrichment_status === "no_match"
+    ).length;
+
+    return this.overdueRegulatoryObligationCount + this.globalBuildingSafetyOverdueCount + siteCriticalCount;
+  }
+
+  get regulatoryMissingProofCount(): number {
+    return this.regulatoryProofGapItems.length;
+  }
+
+  get regulatoryIncompleteSitesCount(): number {
+    const inferredOnlyCount = this.regulatoryAllSites.filter((site) => !site.declaredSite).length;
+    const declaredSitesToConsolidateCount = this.activeOrganizationSites.filter(
+      (site) => site.location_enrichment_status !== "enriched"
+    ).length;
+
+    return inferredOnlyCount + declaredSitesToConsolidateCount;
+  }
+
   get regulatoryScoreDrivers(): RegulatoryScoreDriverItem[] {
     const missingProfileItems = this.regulatoryProfile?.missing_profile_items ?? [];
     const profileReady = this.regulatoryProfile?.profile_status === "ready" && !this.isOnboardingPending;
@@ -8388,6 +8641,93 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     ];
   }
 
+  get regulatoryObligationActionItems(): RegulatoryShowcasePriorityItem[] {
+    return [...this.regulatoryObligations]
+      .filter((obligation) => obligation.status !== "compliant")
+      .sort((left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right))
+      .map((obligation) => {
+        const availableEvidenceCount = this.getAvailableRegulatoryEvidenceCountForObligation(obligation.id);
+        const action = this.getRegulatoryObligationAction(obligation, availableEvidenceCount);
+        const level = this.getRegulatoryPriorityLevel(obligation.status, availableEvidenceCount === 0);
+        const titlePrefix =
+          obligation.status === "overdue"
+            ? "Traiter"
+            : obligation.status === "to_verify"
+              ? "Vérifier"
+              : availableEvidenceCount === 0
+                ? "Compléter"
+                : "Ouvrir";
+
+        return {
+          id: `obligation-action-${obligation.id}`,
+          title: `${titlePrefix} ${obligation.title}`,
+          familyLabel: this.getRegulatoryFamilyLabel(obligation.category),
+          levelLabel: level.label,
+          tone: level.tone,
+          impact:
+            availableEvidenceCount === 0
+              ? `${obligation.reason_summary} Aucune preuve disponible ne permet encore de démontrer ce point.`
+              : obligation.reason_summary,
+          context: this.getObligationFirstAction(obligation, availableEvidenceCount),
+          focusLabel: null,
+          actionLabel: action.actionLabel,
+          actionKind: action.actionKind,
+          sectionId: action.sectionId,
+          obligationId: action.obligationId,
+          siteId: action.siteId,
+          rank: this.getRegulatoryObligationRank(obligation),
+        };
+      });
+  }
+
+  get regulatoryProofGapItems(): RegulatoryShowcasePriorityItem[] {
+    const items: Array<RegulatoryShowcasePriorityItem | null> = [...this.regulatoryObligations]
+      .sort((left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right))
+      .map((obligation) => {
+        const availableEvidenceCount = this.getAvailableRegulatoryEvidenceCountForObligation(obligation.id);
+        const nonAvailableEvidenceCount = this.getNonAvailableRegulatoryEvidenceCountForObligation(obligation.id);
+
+        if (obligation.status === "compliant" && availableEvidenceCount > 0) {
+          return null;
+        }
+
+        if (availableEvidenceCount > 0 && nonAvailableEvidenceCount === 0) {
+          return null;
+        }
+
+        const level = this.getRegulatoryPriorityLevel(obligation.status, true);
+        const isMissingProof = availableEvidenceCount === 0;
+
+        return {
+          id: `proof-gap-${obligation.id}`,
+          title: isMissingProof
+            ? `Ajouter une preuve pour ${obligation.title}`
+            : `Vérifier le document pour ${obligation.title}`,
+          familyLabel: "Preuves",
+          levelLabel: level.label,
+          tone: level.tone,
+          impact: isMissingProof
+            ? "Aucune pièce disponible ne permet encore de démontrer cette obligation."
+            : `${nonAvailableEvidenceCount} document${nonAvailableEvidenceCount > 1 ? "s restent" : " reste"} à régulariser pour rendre la preuve exploitable.`,
+          context: this.getObligationFirstAction(obligation, availableEvidenceCount),
+          focusLabel: null,
+          actionLabel: isMissingProof ? "Ajouter une preuve" : "Voir les preuves",
+          actionKind: "scroll",
+          sectionId: "reg-evidence-section",
+          obligationId: obligation.id,
+          siteId: null,
+          rank: this.getRegulatoryObligationRank(obligation) + (isMissingProof ? 1 : 4),
+        };
+      });
+
+    return items.filter((item): item is RegulatoryShowcasePriorityItem => item !== null);
+  }
+
+  get regulatorySiteActionItems(): RegulatoryShowcasePriorityItem[] {
+    return this.buildRegulatorySitePriorityCandidates()
+      .sort((left, right) => left.rank - right.rank || left.title.localeCompare(right.title));
+  }
+
   get regulatoryRecommendedActionsSummary(): string {
     if (this.regulatoryRecommendedActions.length === 0) {
       return "Le module est déjà bien cadré pour le moment.";
@@ -8427,30 +8767,31 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
   get regulatoryShowcaseSummary(): RegulatoryShowcaseSummary {
     const siteInsight = this.getRegulatorySiteInsight();
-    const priorityCount = this.overdueRegulatoryObligationCount + this.globalBuildingSafetyOverdueCount;
+    const criticalCount = this.regulatoryCriticalCount;
     const profileIncomplete = this.regulatoryProfile?.profile_status !== "ready" || this.isOnboardingPending;
-    const siteNeedsAttention = siteInsight.tone === "warning" || siteInsight.tone === "progress";
+    const siteNeedsAttention = this.regulatoryIncompleteSitesCount > 0;
     const hasAnySite = this.regulatoryAllSites.length > 0;
     const hasVerification = this.regulatoryObligationsToVerifyCount > 0;
+    const hasMissingProof = this.regulatoryMissingProofCount > 0;
     const allCompliant = this.regulatoryObligations.length > 0
       && this.regulatoryObligations.every((obligation) => obligation.status === "compliant");
 
-    let statusLabel = "À compléter";
+    let statusLabel = "Incomplet";
     let tone: CfmTone = "progress";
     let headline = "Le socle réglementaire prend forme.";
     let summary = "Le module vous aide à cadrer vos obligations, vos sites et vos preuves sans lecture juridique lourde.";
     let context: string | null = "Commencez par les trois priorités du moment pour faire monter la qualité de conformité rapidement.";
     let scoreSummary = "Le score combine le profil, les sites, le DUERP, les preuves et les sujets encore ouverts.";
 
-    if (priorityCount > 0) {
-      statusLabel = "Prioritaire";
-      tone = "warning";
+    if (criticalCount > 0) {
+      statusLabel = "Critique";
+      tone = "danger";
       headline = "Des sujets demandent une action rapide.";
       summary = "Le copilote détecte des points réglementaires ou bâtiment qui doivent être repris en premier.";
       context = "Traitez d’abord les sujets prioritaires puis rattachez une preuve simple pour refermer la boucle.";
       scoreSummary = "Le score reste pénalisé tant que les sujets prioritaires, les contrôles en retard ou les preuves manquantes restent ouverts.";
-    } else if (profileIncomplete || !hasAnySite) {
-      statusLabel = "À compléter";
+    } else if (profileIncomplete || !hasAnySite || hasMissingProof) {
+      statusLabel = "Incomplet";
       tone = "progress";
       headline = "La base est en cours de construction.";
       summary = "Le module a déjà identifié les premiers sujets, mais le socle reste encore trop partiel pour être pleinement fiable.";
@@ -8806,7 +9147,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     if (obligationId) {
       this.selectedObligationId = obligationId;
     }
-    this.scrollToWorkspaceSection(sectionId);
+    void this.navigateToWorkspaceRoute(this.getRegulatoryRouteForSection(sectionId));
   }
 
   get buildingSafetyOverdueCount(): number {
@@ -8901,6 +9242,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.accessToken = response.access_token;
       this.session = response.session;
       this.selectedOrganizationId = response.session.current_membership.organization.id;
+      this.syncDesktopSessionState();
       this.loading = false;
 
       let navigationSucceeded = await this.router.navigateByUrl("/app/home");
@@ -8935,6 +9277,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.cancelBuildingSafetyEditing();
     }
     this.resetBetaFeedback();
+    this.syncDesktopSessionState();
     await this.refreshSession(this.selectedOrganizationId);
   }
 
@@ -9040,6 +9383,60 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     } finally {
       this.organizationSiteSaving = false;
     }
+  }
+
+  async createWorksite(): Promise<string | null> {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+      return null;
+    }
+
+    const worksiteName = this.worksiteCreateForm.name.trim();
+    if (!worksiteName) {
+      return null;
+    }
+
+    this.worksiteCreateSaving = true;
+    this.errorMessage = "";
+    this.feedbackMessage = "";
+    try {
+      const payload: WorksiteCreateRequest = {
+        name: worksiteName,
+        site_id: this.worksiteCreateForm.siteId || null,
+        status: this.worksiteCreateForm.status,
+        description: this.normalizeOptionalText(this.worksiteCreateForm.description),
+      };
+      const createdWorksite = await createWorksiteRequest(
+        this.accessToken,
+        this.selectedOrganizationId,
+        payload,
+      );
+      this.billingWorksites = [createdWorksite, ...this.billingWorksites];
+      this.resetWorksiteCreateForm();
+      this.worksiteCreateOpen = false;
+      this.feedbackMessage = `Chantier ${createdWorksite.name} créé.`;
+      return createdWorksite.id;
+    } catch (error) {
+      this.errorMessage = this.toErrorMessage(error, "save");
+      return null;
+    } finally {
+      this.worksiteCreateSaving = false;
+    }
+  }
+
+  isWorksiteSummaryPdfBusy(worksiteId: string): boolean {
+    return this.worksiteDocumentPdfBusyId === worksiteId;
+  }
+
+  isWorksitePreventionPlanPdfBusy(worksiteId: string): boolean {
+    return this.worksitePreventionPlanPdfBusyId === worksiteId;
+  }
+
+  async downloadWorksiteSummaryPdfFromPage(worksiteId: string): Promise<void> {
+    await this.exportWorksiteSummaryPdf(worksiteId);
+  }
+
+  async downloadWorksitePreventionPlanPdfFromPage(worksiteId: string): Promise<void> {
+    await this.exportWorksitePreventionPlanPdf(worksiteId);
   }
 
   startEditingCustomer(customer: BillingCustomerRecord): void {
@@ -9612,7 +10009,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.feedbackMessage = matchedCustomer
       ? `Devis préparé depuis le chantier ${worksite.name}.`
       : `Devis préparé depuis le chantier ${worksite.name}. Client à confirmer manuellement.`;
-    void this.navigateToWorkspaceRoute("/app/facturation", "billing-quote-card");
+    void this.navigateToWorkspaceRoute("/app/facturation/devis");
   }
 
   prepareInvoiceFromWorksite(worksiteId: string): void {
@@ -9632,7 +10029,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.feedbackMessage = matchedCustomer
       ? `Facture préparée depuis le chantier ${worksite.name}.`
       : `Facture préparée depuis le chantier ${worksite.name}. Client à confirmer manuellement.`;
-    void this.navigateToWorkspaceRoute("/app/facturation", "billing-invoice-card");
+    void this.navigateToWorkspaceRoute("/app/facturation/factures");
   }
 
   prepareQuoteFromCustomer(customerId: string): void {
@@ -9652,7 +10049,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.feedbackMessage = matchedWorksite
       ? `Devis préparé pour ${customer.name}, avec le chantier ${matchedWorksite.name}.`
       : `Devis préparé pour ${customer.name}. Aucun chantier repris automatiquement.`;
-    void this.navigateToWorkspaceRoute("/app/facturation", "billing-quote-card");
+    void this.navigateToWorkspaceRoute("/app/facturation/devis");
   }
 
   prepareInvoiceFromCustomer(customerId: string): void {
@@ -9672,7 +10069,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.feedbackMessage = matchedWorksite
       ? `Facture préparée pour ${customer.name}, avec le chantier ${matchedWorksite.name}.`
       : `Facture préparée pour ${customer.name}. Aucun chantier repris automatiquement.`;
-    void this.navigateToWorkspaceRoute("/app/facturation", "billing-invoice-card");
+    void this.navigateToWorkspaceRoute("/app/facturation/factures");
   }
 
   async changeQuoteWorksite(quote: QuoteRecord, worksiteId: string): Promise<void> {
@@ -10209,7 +10606,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   }
 
   async exportRegulatoryPdf(): Promise<void> {
-    if (!this.accessToken || !this.selectedOrganizationId || !this.canReadOrganization) {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canExportReglementation) {
       return;
     }
 
@@ -10260,7 +10657,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   }
 
   async relaunchSiteEnrichment(site: OrganizationSiteRecord): Promise<void> {
-    if (!this.accessToken || !this.selectedOrganizationId || !this.canManageOrganization) {
+    if (!this.accessToken || !this.selectedOrganizationId || !this.canActOnReglementation) {
       return;
     }
 
@@ -10298,6 +10695,22 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.homeSiteQuickCreateOpen = false;
     if (!this.organizationSiteSaving) {
       this.resetSiteForm();
+    }
+  }
+
+  openWorksiteCreate(): void {
+    if (!this.canManageOrganization || !this.isChantierEnabled) {
+      return;
+    }
+
+    this.resetWorksiteCreateForm();
+    this.worksiteCreateOpen = true;
+  }
+
+  closeWorksiteCreate(): void {
+    this.worksiteCreateOpen = false;
+    if (!this.worksiteCreateSaving) {
+      this.resetWorksiteCreateForm();
     }
   }
 
@@ -10659,6 +11072,26 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return proof.notes;
     }
     return uploadedLabel;
+  }
+
+  private mapWorksiteSignaturePageItem(signature: WorksiteSignatureRecord): DesktopWorksiteLinkedAssetItem {
+    return {
+      id: signature.id,
+      label: signature.label,
+      detail: this.getWorksiteSignatureOptionLabel(signature),
+      statusLabel: this.getWorksiteDocumentTechnicalStatusLabel(signature.status),
+      statusTone: this.getWorksiteDocumentTechnicalStatusTone(signature.status),
+    };
+  }
+
+  private mapWorksiteProofPageItem(proof: WorksiteProofRecord): DesktopWorksiteLinkedAssetItem {
+    return {
+      id: proof.id,
+      label: proof.label,
+      detail: this.formatWorksiteProofDetail(proof),
+      statusLabel: this.getWorksiteDocumentTechnicalStatusLabel(proof.status),
+      statusTone: this.getWorksiteDocumentTechnicalStatusTone(proof.status),
+    };
   }
 
   getQuoteStatusLabel(status: QuoteStatus): string {
@@ -11237,16 +11670,13 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   } {
     switch (obligation.id) {
       case "reg-employees-register":
-        if (this.regulatoryProfile?.profile_status !== "ready" || this.isOnboardingPending) {
-          return {
-            actionLabel: "Compléter le profil",
-            actionKind: "scroll",
-            sectionId: "reg-profile-section",
-            obligationId: null,
-            siteId: null,
-          };
-        }
-        break;
+        return {
+          actionLabel: "Voir les obligations",
+          actionKind: "scroll",
+          sectionId: "reg-obligations-section",
+          obligationId: obligation.id,
+          siteId: null,
+        };
       case "reg-employees-safety-organization":
         return {
           actionLabel: "Ouvrir DUERP",
@@ -11264,13 +11694,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
           siteId: null,
         };
       case "reg-buildings-periodic-checks":
-        return {
-          actionLabel: "Voir la sécurité",
-          actionKind: "scroll",
-          sectionId: "reg-building-safety-section",
-          obligationId: null,
-          siteId: null,
-        };
+        break;
       case "reg-warehouse-storage-rules":
         return {
           actionLabel:
@@ -11295,157 +11719,212 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     };
   }
 
+  private getAvailableRegulatoryEvidenceCountForObligation(obligationId: string): number {
+    return this.regulatoryEvidences.filter((evidence) =>
+      evidence.obligation_id === obligationId && evidence.status === "available"
+    ).length;
+  }
+
+  private getNonAvailableRegulatoryEvidenceCountForObligation(obligationId: string): number {
+    return this.regulatoryEvidences.filter((evidence) =>
+      evidence.obligation_id === obligationId
+      && evidence.status !== "available"
+      && evidence.status !== "archived"
+    ).length;
+  }
+
+  private getRegulatoryPriorityLevel(
+    status: ComplianceStatus,
+    isIncomplete: boolean,
+  ): { label: string; tone: CfmTone } {
+    switch (status) {
+      case "overdue":
+        return { label: "Critique", tone: "danger" };
+      case "to_verify":
+        return { label: "À vérifier", tone: "warning" };
+      case "to_complete":
+        return { label: "Incomplet", tone: "progress" };
+      case "in_progress":
+        return isIncomplete
+          ? { label: "Incomplet", tone: "progress" }
+          : { label: "À vérifier", tone: "warning" };
+      case "compliant":
+        return isIncomplete
+          ? { label: "Incomplet", tone: "progress" }
+          : { label: "Conforme", tone: "success" };
+    }
+  }
+
   private getRegulatoryShowcaseActionGroupKey(action: {
     actionKind: RegulatoryShowcaseActionKind;
     sectionId: string;
+    obligationId?: string | null;
     siteId: string | null;
   }): string {
-    return action.actionKind === "site_enrichment"
-      ? `site:${action.siteId ?? "missing"}`
-      : `scroll:${action.sectionId}`;
+    if (action.actionKind === "site_enrichment") {
+      return `site:${action.siteId ?? "missing"}`;
+    }
+    if (action.obligationId) {
+      return `${action.sectionId}:obligation:${action.obligationId}`;
+    }
+    if (action.siteId) {
+      return `${action.sectionId}:site:${action.siteId}`;
+    }
+    return `scroll:${action.sectionId}`;
   }
 
-  private buildRegulatoryPriorityCandidates(): RegulatoryShowcasePriorityItem[] {
+  private buildRegulatorySitePriorityCandidates(): RegulatoryShowcasePriorityItem[] {
     const candidates: RegulatoryShowcasePriorityItem[] = [];
-    const missingProfileItems = this.regulatoryProfile?.missing_profile_items ?? [];
     const allSites = this.regulatoryAllSites;
     const inferredOnlySites = allSites.filter((site) => !site.declaredSite);
-    const problematicSite = this.getProblematicRegulatorySite();
-    const problematicSiteState = problematicSite ? this.getSiteEnrichmentUiState(problematicSite) : null;
-    const highestSeverityEntry = this.getHighestPriorityDuerpEntry();
-    const highRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
-
-    if (this.isOnboardingPending || missingProfileItems.length > 0) {
-      const missingLabel = missingProfileItems.length > 0
-        ? missingProfileItems.slice(0, 2).join(", ")
-        : "les informations essentielles";
-      candidates.push({
-        id: "priority-profile",
-        title: "Compléter le profil entreprise",
-        familyLabel: "Profil",
-        levelLabel: "À compléter",
-        tone: "progress",
-        impact: `Il manque encore ${missingLabel} pour fiabiliser le périmètre réglementaire.`,
-        context: "Le profil reste la base du copilote de conformité.",
-        focusLabel: null,
-        actionLabel: "Compléter le profil",
-        actionKind: "scroll",
-        sectionId: "reg-profile-section",
-        obligationId: null,
-        siteId: null,
-        rank: 18,
-      });
-    }
+    const rankedSites = [...this.activeOrganizationSites].sort((left, right) => {
+      const leftRank =
+        left.location_enrichment_status === "failed"
+          ? 0
+          : left.location_enrichment_status === "no_match"
+            ? 1
+            : left.location_enrichment_status === "partial"
+              ? 2
+              : left.location_enrichment_status == null
+                ? 3
+                : 4;
+      const rightRank =
+        right.location_enrichment_status === "failed"
+          ? 0
+          : right.location_enrichment_status === "no_match"
+            ? 1
+            : right.location_enrichment_status === "partial"
+              ? 2
+              : right.location_enrichment_status == null
+                ? 3
+                : 4;
+      return leftRank - rightRank || left.name.localeCompare(right.name);
+    });
 
     if (allSites.length === 0) {
       candidates.push({
         id: "priority-first-site",
         title: "Déclarer un premier site",
         familyLabel: "Sites",
-        levelLabel: "À compléter",
+        levelLabel: "Incomplet",
         tone: "progress",
         impact: "Sans site déclaré, la lecture réglementaire reste plus générale et moins démonstrative.",
-        context: "Un site reconnu rend tout de suite le module plus concret.",
+        context: "Ajoutez un premier site pour relier obligations, sécurité bâtiment et preuves à un lieu concret.",
         focusLabel: null,
         actionLabel: "Ajouter un site",
         actionKind: "scroll",
         sectionId: "reg-sites-section",
         obligationId: null,
         siteId: null,
-        rank: 26,
+        rank: 24,
       });
-    } else if (inferredOnlySites.length > 0) {
+      return candidates;
+    }
+
+    if (inferredOnlySites.length > 0) {
       candidates.push({
         id: "priority-sites-to-consolidate",
-        title: "Compléter les sites suivis",
+        title: "Confirmer les sites repérés",
         familyLabel: "Sites",
-        levelLabel: "À vérifier",
+        levelLabel: "Incomplet",
         tone: "progress",
-        impact: `${inferredOnlySites.length} site${inferredOnlySites.length > 1 ? "s apparaissent" : " apparait"} déjà dans le DUERP, la sécurité ou les preuves.`,
-        context: "Fiabiliser ces sites supprime les contradictions visibles du module.",
+        impact: `${inferredOnlySites.length} site${inferredOnlySites.length > 1 ? "s apparaissent" : " apparait"} déjà dans le DUERP, la sécurité ou les preuves sans être encore confirmé${inferredOnlySites.length > 1 ? "s" : ""}.`,
+        context: "Consolider ces sites évite une lecture terrain partielle dans tout le module.",
         focusLabel: inferredOnlySites[0]?.name ?? null,
-        actionLabel: "Vérifier les sites",
+        actionLabel: "Voir les sites",
         actionKind: "scroll",
         sectionId: "reg-sites-section",
         obligationId: null,
         siteId: null,
-        rank: 22,
+        rank: 18,
       });
     }
 
-    if (problematicSite && problematicSiteState) {
-      const status = problematicSite.location_enrichment_status;
+    for (const site of rankedSites) {
+      const status = site.location_enrichment_status;
+      if (status === "enriched") {
+        continue;
+      }
+
+      const enrichment = this.getSiteEnrichmentUiState(site);
+      const level =
+        status === "failed" || status === "no_match"
+          ? { label: "Critique", tone: "danger" as CfmTone }
+          : status === "partial"
+            ? { label: "À vérifier", tone: "warning" as CfmTone }
+            : { label: "Incomplet", tone: "progress" as CfmTone };
+
       candidates.push({
-        id: `priority-site-${problematicSite.id}`,
-        title: `Fiabiliser ${problematicSite.name}`,
+        id: `priority-site-${site.id}`,
+        title:
+          status === "failed" || status === "no_match"
+            ? `Vérifier ${site.name}`
+            : status === "partial"
+              ? `Compléter ${site.name}`
+              : `Lancer l’enrichissement pour ${site.name}`,
         familyLabel: "Sites",
-        levelLabel:
-          status === "failed" || status === "no_match"
-            ? "À vérifier"
-            : "À compléter",
-        tone:
-          status === "failed" || status === "no_match"
-            ? "warning"
-            : "progress",
+        levelLabel: level.label,
+        tone: level.tone,
         impact:
           status === "failed"
-            ? `${problematicSite.name} n'a pas pu être enrichi pour le moment.`
+            ? `${site.name} n'a pas pu être enrichi automatiquement et reste fragile pour la lecture réglementaire.`
             : status === "no_match"
-              ? `${problematicSite.name} n'a pas encore d'adresse reconnue automatiquement.`
+              ? `${site.name} n'a pas encore d'adresse reconnue automatiquement.`
               : status === "partial"
-                ? `${problematicSite.name} reste enrichi partiellement.`
-                : `${problematicSite.name} n'a pas encore été vérifié automatiquement.`,
-        context: problematicSiteState.reasonLabel
-          ?? "Les sites fiables renforcent la lecture réglementaire par adresse et bâtiment.",
-        focusLabel: problematicSite.name,
-        actionLabel: problematicSiteState.retryLabel,
+                ? `${site.name} reste enrichi partiellement et mérite une vérification rapide.`
+                : `${site.name} n'a pas encore été enrichi automatiquement.`,
+        context: enrichment.reasonLabel ?? enrichment.detail,
+        focusLabel: site.name,
+        actionLabel: enrichment.retryLabel,
         actionKind: "site_enrichment",
         sectionId: "reg-sites-section",
         obligationId: null,
-        siteId: problematicSite.id,
+        siteId: site.id,
         rank:
           status === "failed"
-            ? 12
+            ? 8
             : status === "no_match"
-              ? 14
+              ? 10
               : status === "partial"
-                ? 20
-                : 28,
+                ? 16
+                : 22,
       });
     }
 
-    if (this.globalBuildingSafetyOverdueCount > 0) {
-      candidates.push({
-        id: "priority-building-safety",
-        title: "Traiter les contrôles bâtiment en retard",
-        familyLabel: "Sécurité / prévention",
-        levelLabel: "Prioritaire",
-        tone: "warning",
-        impact: `${this.globalBuildingSafetyOverdueCount} contrôle${this.globalBuildingSafetyOverdueCount > 1 ? "s" : ""} demande${this.globalBuildingSafetyOverdueCount > 1 ? "nt" : ""} une action rapide.`,
-        context: "Ces contrôles sont très démonstratifs dans une revue de conformité.",
-        focusLabel:
-          this.buildingSafetyItems.find((item) => item.alert_status === "overdue")?.name
-          ?? null,
-        actionLabel: "Voir la sécurité",
-        actionKind: "scroll",
-        sectionId: "reg-building-safety-section",
-        obligationId: null,
-        siteId: null,
-        rank: 6,
-      });
+    return candidates;
+  }
+
+  private buildRegulatoryPriorityCandidates(): RegulatoryShowcasePriorityItem[] {
+    const candidates: RegulatoryShowcasePriorityItem[] = [];
+    const highestSeverityEntry = this.getHighestPriorityDuerpEntry();
+    const highRiskWork = this.getRegulatoryBooleanCriterion("performs_high_risk_work") === true;
+    const obligationPrimary = this.regulatoryObligationActionItems[0] ?? null;
+    const proofGapPrimary = this.regulatoryProofGapItems[0] ?? null;
+    const sitePrimary = this.regulatorySiteActionItems[0] ?? null;
+
+    if (obligationPrimary) {
+      candidates.push(obligationPrimary);
+    }
+
+    if (proofGapPrimary) {
+      candidates.push(proofGapPrimary);
+    }
+
+    if (sitePrimary) {
+      candidates.push(sitePrimary);
     }
 
     if (this.activeDuerpEntries.length > 0 || highRiskWork) {
       candidates.push({
         id: "priority-duerp",
-        title: this.activeDuerpEntries.length > 0 ? "Reprendre le DUERP actif" : "Ouvrir le DUERP",
+        title: this.activeDuerpEntries.length === 0 ? "Ouvrir le DUERP" : "Reprendre le DUERP actif",
         familyLabel: "Sécurité / prévention",
         levelLabel:
           this.activeDuerpEntries.length === 0
-            ? "À compléter"
+            ? "Incomplet"
             : highestSeverityEntry?.severity === "high"
               ? "À vérifier"
-              : "En cours",
+              : "Incomplet",
         tone:
           this.activeDuerpEntries.length === 0
             ? "progress"
@@ -11455,17 +11934,17 @@ export class AppComponent implements DoCheck, DesktopShellContext {
         impact:
           this.activeDuerpEntries.length === 0
             ? "Les interventions à risque méritent au moins un premier risque documenté."
-            : `${this.activeDuerpEntries.length} risque${this.activeDuerpEntries.length > 1 ? "s" : ""} actif${this.activeDuerpEntries.length > 1 ? "s" : ""} reste${this.activeDuerpEntries.length > 1 ? "nt" : ""} à consolider.`,
+            : `${this.activeDuerpEntries.length} risque${this.activeDuerpEntries.length > 1 ? "s restent" : " reste"} à consolider dans le DUERP.`,
         context: highestSeverityEntry
           ? `${highestSeverityEntry.work_unit_name} · ${highestSeverityEntry.risk_label}`
-          : "Le DUERP relie déjà la conformité aux sites, à la prévention et aux preuves terrain.",
+          : "Le DUERP relie déjà la prévention aux sites et aux preuves terrain.",
         focusLabel: highestSeverityEntry?.site_id ? this.getSiteNameById(highestSeverityEntry.site_id) : "DUERP",
         actionLabel: "Ouvrir DUERP",
         actionKind: "scroll",
         sectionId: "reg-duerp-section",
         obligationId: null,
         siteId: null,
-        rank: this.activeDuerpEntries.length === 0 ? 24 : highestSeverityEntry?.severity === "high" ? 18 : 26,
+        rank: this.activeDuerpEntries.length === 0 ? 28 : highestSeverityEntry?.severity === "high" ? 14 : 26,
       });
     }
 
@@ -11473,37 +11952,19 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       candidates.map((candidate) => this.getRegulatoryShowcaseActionGroupKey(candidate))
     );
 
-    for (const obligation of this.regulatoryObligations.slice().sort(
-      (left, right) => this.getRegulatoryObligationRank(left) - this.getRegulatoryObligationRank(right)
-    )) {
-      const evidenceCount = this.regulatoryEvidences.filter((evidence) => evidence.obligation_id === obligation.id).length;
-      const action = this.getRegulatoryObligationAction(obligation, evidenceCount);
-      if (occupiedTargets.has(this.getRegulatoryShowcaseActionGroupKey(action))) {
+    const fillerItems = [
+      ...this.regulatoryObligationActionItems.slice(obligationPrimary ? 1 : 0),
+      ...this.regulatoryProofGapItems.slice(proofGapPrimary ? 1 : 0),
+      ...this.regulatorySiteActionItems.slice(sitePrimary ? 1 : 0),
+    ].sort((left, right) => left.rank - right.rank || left.title.localeCompare(right.title));
+
+    for (const item of fillerItems) {
+      const groupKey = this.getRegulatoryShowcaseActionGroupKey(item);
+      if (occupiedTargets.has(groupKey)) {
         continue;
       }
-      occupiedTargets.add(this.getRegulatoryShowcaseActionGroupKey(action));
-      candidates.push({
-        id: `priority-obligation-${obligation.id}`,
-        title: obligation.title,
-        familyLabel: this.getRegulatoryFamilyLabel(obligation.category),
-        levelLabel:
-          obligation.status === "overdue"
-            ? "Prioritaire"
-            : this.getComplianceStatusLabel(obligation.status),
-        tone:
-          obligation.status === "overdue"
-            ? "warning"
-            : this.getComplianceStatusTone(obligation.status),
-        impact: obligation.reason_summary,
-        context: this.getObligationFirstAction(obligation, evidenceCount),
-        focusLabel: null,
-        actionLabel: action.actionLabel,
-        actionKind: action.actionKind,
-        sectionId: action.sectionId,
-        obligationId: action.obligationId,
-        siteId: action.siteId,
-        rank: this.getRegulatoryObligationRank(obligation),
-      });
+      occupiedTargets.add(groupKey);
+      candidates.push(item);
     }
 
     return candidates;
@@ -11617,6 +12078,23 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     globalThis.setTimeout(executeScroll, 0);
   }
 
+  private getRegulatoryRouteForSection(sectionId: string): string {
+    switch (sectionId) {
+      case "reg-obligations-section":
+      case "reg-duerp-section":
+        return "/app/reglementation/obligations";
+      case "reg-evidence-section":
+        return "/app/reglementation/preuves";
+      case "reg-sites-section":
+        return "/app/reglementation/sites";
+      case "reg-exports-section":
+        return "/app/reglementation/exports";
+      case "reg-synthese-section":
+      default:
+        return "/app/reglementation/synthese";
+    }
+  }
+
   private async refreshSession(organizationId?: string | null): Promise<void> {
     if (!this.accessToken) {
       return;
@@ -11633,6 +12111,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.session = session;
       this.selectedOrganizationId = session.current_membership.organization.id;
       persistSession(this.accessToken, session);
+      this.syncDesktopSessionState();
       await this.ensureAccessibleWorkspaceRoute();
     } catch (error) {
       const nextErrorMessage = this.toErrorMessage(error, "load");
@@ -11675,7 +12154,11 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       return;
     }
 
-    if (this.workspaceHydratedOrganizationId === organizationId && this.hasWorkspaceContent) {
+    if (
+      this.workspaceHydratedOrganizationId === organizationId
+      && this.hasWorkspaceContent
+      && this.hasLoadedWorkspaceSegmentsForPath(currentPath)
+    ) {
       return;
     }
 
@@ -11714,9 +12197,11 @@ export class AppComponent implements DoCheck, DesktopShellContext {
   private async resolveWorkspaceRequest<T>(label: string, requestFactory: () => Promise<T>, fallbackValue: T): Promise<T> {
     try {
       const payload = await requestFactory();
+      this.workspaceLoadedSegments[label] = true;
       this.clearWorkspaceSegmentIssue(label);
       return payload;
     } catch (error) {
+      this.workspaceLoadedSegments[label] = false;
       this.setWorkspaceSegmentIssue(label, this.toWorkspaceSegmentIssueMessage(label, error));
       console.warn("[workspace] segment failed.", {
         label,
@@ -11732,6 +12217,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     if (!this.accessToken || !this.selectedOrganizationId) {
       this.workspaceHydratedOrganizationId = null;
       this.workspaceSegmentIssues = {};
+      this.workspaceLoadedSegments = {};
       this.resetWorkspaceState();
       return;
     }
@@ -11739,6 +12225,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     if (AppComponent.WORKSPACE_LOADING_DISABLED) {
       this.workspaceHydratedOrganizationId = null;
       this.workspaceSegmentIssues = {};
+      this.workspaceLoadedSegments = {};
       this.organizationWorkspaceLoading = false;
       this.resetWorkspaceState();
       return;
@@ -11746,6 +12233,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
     if (this.workspaceHydratedOrganizationId !== this.selectedOrganizationId) {
       this.workspaceSegmentIssues = {};
+      this.workspaceLoadedSegments = {};
     }
     this.organizationWorkspaceLoading = true;
     try {
@@ -11873,12 +12361,19 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.organizationProfile = profile;
       this.organizationSites = this.sortSites(sites);
       this.regulatoryProfile = regulatoryProfile;
-      this.billingCustomers = customers;
-      this.billingWorksites = worksites;
+      this.desktopBillingState.replaceState({
+        customers,
+        worksites,
+        quotes,
+        invoices,
+      });
       this.worksiteDocuments = worksiteDocuments;
       this.worksiteProofs = worksiteProofs;
       this.worksiteSignatures = worksiteSignatures;
       this.worksiteAssignees = worksiteAssignees;
+      if (this.worksiteCreateForm.siteId && !sites.some((site) => site.id === this.worksiteCreateForm.siteId)) {
+        this.worksiteCreateForm.siteId = "";
+      }
       if (
         this.selectedCoordinationAssigneeFilter !== "all"
         && this.selectedCoordinationAssigneeFilter !== "unassigned"
@@ -11906,6 +12401,8 @@ export class AppComponent implements DoCheck, DesktopShellContext {
         this.selectedWorksiteCoordinationId = null;
         this.selectedCoordinationStatusFilter = "all";
         this.selectedCoordinationAssigneeFilter = "all";
+        this.worksiteCreateOpen = false;
+        this.resetWorksiteCreateForm();
       }
       if (
         this.selectedWorksiteDocumentDetailId
@@ -11931,8 +12428,6 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       ) {
         this.cancelWorksitePreventionPlanEditing();
       }
-      this.quotes = quotes;
-      this.invoices = invoices;
       this.quoteEditingId = null;
       this.quoteEditingSaving = false;
       this.quoteFollowUpBusyId = null;
@@ -12653,6 +13148,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
       this.accessToken = storedAccessToken;
       this.selectedOrganizationId = storedOrganizationId;
     }
+    this.syncDesktopSessionState();
 
     if (this.isLoginRoutePath(currentPath)) {
       this.clearScheduledWorkspaceRefresh();
@@ -12694,7 +13190,13 @@ export class AppComponent implements DoCheck, DesktopShellContext {
         return;
       }
 
-      if (!this.organizationWorkspaceLoading && !this.isWorkspaceHydratedForCurrentOrganization) {
+      if (
+        !this.organizationWorkspaceLoading
+        && (
+          !this.isWorkspaceHydratedForCurrentOrganization
+          || !this.hasLoadedWorkspaceSegmentsForPath(currentPath)
+        )
+      ) {
         this.scheduleWorkspaceRefresh("route change");
       }
       await this.ensureAccessibleWorkspaceRoute();
@@ -12706,8 +13208,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.organizationProfile = null;
     this.organizationSites = [];
     this.regulatoryProfile = null;
-    this.billingCustomers = [];
-    this.billingWorksites = [];
+    this.desktopBillingState.clear();
     this.worksiteDocuments = [];
     this.worksiteProofs = [];
     this.worksiteSignatures = [];
@@ -12730,14 +13231,42 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.worksitePreventionPlanEditingId = null;
     this.worksiteCoordinationDrafts = {};
     this.worksiteDocumentCoordinationDrafts = {};
-    this.quotes = [];
-    this.invoices = [];
     this.buildingSafetyItems = [];
     this.buildingSafetyAlerts = [];
     this.duerpEntries = [];
     this.regulatoryEvidences = [];
     this.billingDraftsHydratedScope = null;
     this.refreshBillingDraftSnapshots();
+  }
+
+  private hasLoadedWorkspaceSegmentsForPath(path: string): boolean {
+    if (path.startsWith("/app/facturation")) {
+      return Boolean(
+        this.workspaceLoadedSegments["billing-customers"]
+        && this.workspaceLoadedSegments["quotes"]
+        && this.workspaceLoadedSegments["invoices"]
+      );
+    }
+
+    if (path.startsWith("/app/chantiers")) {
+      return Boolean(
+        this.workspaceLoadedSegments["organization-sites"]
+        && this.workspaceLoadedSegments["worksites"]
+      );
+    }
+
+    if (path.startsWith("/app/reglementation")) {
+      return Boolean(
+        this.workspaceLoadedSegments["organization-sites"]
+        && this.workspaceLoadedSegments["regulatory-profile"]
+        && this.workspaceLoadedSegments["building-safety-items"]
+        && this.workspaceLoadedSegments["building-safety-alerts"]
+        && this.workspaceLoadedSegments["duerp-entries"]
+        && this.workspaceLoadedSegments["regulatory-evidences"]
+      );
+    }
+
+    return this.hasWorkspaceContent;
   }
 
   private clearWorkspaceSegmentIssue(label: string): void {
@@ -12790,7 +13319,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
           ? "/app/home"
           : currentPath.startsWith("/app/facturation") && !this.isFacturationEnabled
             ? "/app/home"
-            : currentPath.startsWith("/app/chantier") && !this.isChantierEnabled
+            : currentPath.startsWith("/app/chantiers") && !this.isChantierEnabled
               ? "/app/home"
               : currentPath;
 
@@ -12815,9 +13344,11 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.clearScheduledWorkspaceRefresh();
     this.workspaceHydratedOrganizationId = null;
     this.workspaceSegmentIssues = {};
+    this.workspaceLoadedSegments = {};
     this.accessToken = null;
     this.selectedOrganizationId = null;
     this.session = null;
+    this.syncDesktopSessionState();
     this.loading = false;
     this.organizationWorkspaceLoading = false;
     this.sessionRestoreInProgress = false;
@@ -12828,8 +13359,7 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.organizationSites = [];
     this.regulatoryProfile = null;
     this.selectedObligationId = null;
-    this.billingCustomers = [];
-    this.billingWorksites = [];
+    this.desktopBillingState.clear();
     this.worksiteDocuments = [];
     this.worksiteProofs = [];
     this.worksiteSignatures = [];
@@ -12852,8 +13382,6 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.worksitePreventionPlanEditingId = null;
     this.worksiteCoordinationDrafts = {};
     this.worksiteDocumentCoordinationDrafts = {};
-    this.quotes = [];
-    this.invoices = [];
     this.quoteEditingId = null;
     this.quoteEditingSaving = false;
     this.quoteStatusBusyId = null;
@@ -12887,6 +13415,8 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.resetCustomerForm();
     this.resetQuoteForm();
     this.resetInvoiceForm();
+    this.worksiteCreateOpen = false;
+    this.resetWorksiteCreateForm();
     this.resetWorksitePreventionPlanForm();
     this.resetInvoicePaymentForm();
     this.resetBuildingSafetyForm();
@@ -12894,6 +13424,14 @@ export class AppComponent implements DoCheck, DesktopShellContext {
     this.resetRegulatoryEvidenceForm();
     this.billingDraftsHydratedScope = null;
     this.refreshBillingDraftSnapshots();
+  }
+
+  private syncDesktopSessionState(): void {
+    this.desktopSessionState.sync({
+      accessToken: this.accessToken,
+      organizationId: this.selectedOrganizationId,
+      session: this.session,
+    });
   }
 
   private isModuleDataPending(moduleCode: ModuleCode): boolean {
@@ -13294,6 +13832,15 @@ export class AppComponent implements DoCheck, DesktopShellContext {
 
   private resetInvoiceForm(): void {
     this.invoiceForm = this.createEmptyInvoiceForm();
+  }
+
+  private resetWorksiteCreateForm(): void {
+    this.worksiteCreateForm = {
+      name: "",
+      siteId: "",
+      status: "planned",
+      description: "",
+    };
   }
 
   private resetWorksitePreventionPlanForm(): void {

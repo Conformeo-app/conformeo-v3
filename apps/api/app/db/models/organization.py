@@ -13,7 +13,9 @@ if TYPE_CHECKING:
     from app.db.models.document import Document
     from app.db.models.organization_module import OrganizationModule
     from app.db.models.organization_membership import OrganizationMembership
+    from app.db.models.organization_team import OrganizationTeam
     from app.db.models.organization_site import OrganizationSite
+    from app.db.models.worksite import Worksite
 
 
 class OrganizationStatus(str, enum.Enum):
@@ -78,11 +80,19 @@ class Organization(Base, IdentifiedModel, AuditModel, VersionedModel):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
+    teams: Mapped[list["OrganizationTeam"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
     documents: Mapped[list["Document"]] = relationship(
         back_populates="organization",
         cascade="all, delete-orphan",
     )
     sites: Mapped[list["OrganizationSite"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    worksites: Mapped[list["Worksite"]] = relationship(
         back_populates="organization",
         cascade="all, delete-orphan",
     )

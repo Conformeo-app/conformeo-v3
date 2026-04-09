@@ -32,7 +32,10 @@ def list_worksite_coordination_items(
 ) -> list[WorksiteCoordinationItem]:
     statement = (
         select(WorksiteCoordinationItem)
-        .options(selectinload(WorksiteCoordinationItem.assignee_user))
+        .options(
+            selectinload(WorksiteCoordinationItem.assignee_user),
+            selectinload(WorksiteCoordinationItem.team),
+        )
         .where(
             WorksiteCoordinationItem.organization_id == organization_id,
             WorksiteCoordinationItem.deleted_at.is_(None),
@@ -51,7 +54,10 @@ def get_worksite_coordination_item(
 ) -> WorksiteCoordinationItem | None:
     statement = (
         select(WorksiteCoordinationItem)
-        .options(selectinload(WorksiteCoordinationItem.assignee_user))
+        .options(
+            selectinload(WorksiteCoordinationItem.assignee_user),
+            selectinload(WorksiteCoordinationItem.team),
+        )
         .where(
             WorksiteCoordinationItem.organization_id == organization_id,
             WorksiteCoordinationItem.target_type == target_type,
@@ -110,6 +116,8 @@ def serialize_worksite_coordination(
         "target_type": target_type,
         "target_id": target_id,
         "status": item.status if item is not None else WORKSITE_COORDINATION_STATUS_TODO,
+        "team_id": item.team_id if item is not None else None,
+        "team_name": item.team.name if item is not None and item.team is not None else None,
         "assignee_user_id": item.assignee_user_id if item is not None else None,
         "assignee_display_name": (
             assignee_display_name_override

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.external import router as external_router
+from app.api.routes.organization_admin import router as organization_admin_router
 from app.api.routes.organizations import router as organizations_router
 from app.core.config import get_settings
 
@@ -24,6 +25,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(organizations_router)
+    app.include_router(organization_admin_router)
     app.include_router(external_router)
 
     return app

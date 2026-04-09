@@ -1887,6 +1887,9 @@ class MobileLocalDatabase {
       offline_prepared_at:
         typeof payload.offline_prepared_at === "string" ? payload.offline_prepared_at : null,
       updated_at: typeof payload.updated_at === "string" ? payload.updated_at : record.updatedAt,
+      interventions: Array.isArray(payload.interventions)
+        ? (payload.interventions as WorksiteSummary["interventions"])
+        : [],
       coordination:
         payload.coordination && typeof payload.coordination === "object" && !Array.isArray(payload.coordination)
           ? (payload.coordination as WorksiteCoordinationRecord)

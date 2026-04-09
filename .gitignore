@@ -19,3 +19,5 @@ __pycache__/
 !**/.env.example
 
 apps/api/.venv/
+
+agents_IA/credentials.json

@@ -26,11 +26,11 @@ import { ChangeDetectionStrategy, Component, Input } from "@angular/core";
         display: grid;
         gap: 0.5rem;
         padding: 1.15rem 1.2rem 1.15rem 4rem;
-        border-radius: 22px;
-        border: 1px dashed color-mix(in srgb, var(--cfm-color-border, #bfd3cf) 86%, transparent);
+        border-radius: 16px;
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(245, 249, 249, 0.88));
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(242, 244, 247, 0.78));
+        outline: 1px solid var(--cfm-color-outline-ghost, rgba(70, 70, 77, 0.2));
+        outline-offset: -1px;
       }
 
       .empty-state::before {
@@ -43,8 +43,8 @@ import { ChangeDetectionStrategy, Component, Input } from "@angular/core";
         border-radius: 999px;
         background:
           radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0) 48%),
-          linear-gradient(135deg, rgba(29, 109, 100, 0.24), rgba(245, 188, 88, 0.32));
-        box-shadow: 0 8px 16px rgba(18, 33, 42, 0.08);
+          linear-gradient(135deg, rgba(10, 17, 40, 0.24), rgba(255, 222, 165, 0.42));
+        box-shadow: var(--cfm-shadow-soft, 0 10px 20px rgba(10, 17, 40, 0.03));
       }
 
       .eyebrow,

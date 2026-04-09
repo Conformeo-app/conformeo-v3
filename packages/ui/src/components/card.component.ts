@@ -26,50 +26,46 @@ import { ChangeDetectionStrategy, Component, Input } from "@angular/core";
       .card {
         position: relative;
         overflow: hidden;
-        padding: 1.6rem;
-        border-radius: var(--cfm-radius-panel, 24px);
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 250, 0.94)),
-          color-mix(in srgb, var(--cfm-color-surface, #ffffff) 96%, transparent);
-        border: 1px solid color-mix(in srgb, var(--cfm-color-border, #bfd3cf) 72%, transparent);
-        box-shadow:
-          0 18px 44px rgba(18, 33, 42, 0.08),
-          0 2px 0 rgba(255, 255, 255, 0.8) inset;
+        padding: 1.2rem 1.15rem 1.1rem 1.35rem;
+        border-radius: var(--cfm-radius-panel, 8px);
+        background: var(--cfm-gradient-panel, linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 249, 252, 0.92)));
+        outline: 1px solid var(--cfm-color-outline-ghost, rgba(70, 70, 77, 0.2));
+        outline-offset: -1px;
+        box-shadow: var(--cfm-shadow-card, 0 18px 36px rgba(10, 17, 40, 0.04));
         transition:
-          transform 180ms ease,
           box-shadow 180ms ease,
-          border-color 180ms ease;
+          transform 180ms ease;
+      }
+
+      .card:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--cfm-shadow-overlay, 0 20px 40px rgba(10, 17, 40, 0.06));
       }
 
       .card::before {
         content: "";
         position: absolute;
-        inset: 0 0 auto;
-        height: 4px;
-        background: linear-gradient(90deg, rgba(29, 109, 100, 0.95), rgba(245, 188, 88, 0.72));
-        opacity: 0.9;
-      }
-
-      .card:hover {
-        transform: translateY(-2px);
-        box-shadow:
-          0 24px 58px rgba(18, 33, 42, 0.1),
-          0 2px 0 rgba(255, 255, 255, 0.8) inset;
-        border-color: color-mix(in srgb, var(--cfm-color-border, #bfd3cf) 88%, #ffffff 12%);
+        left: 0;
+        top: 1.1rem;
+        bottom: 1.1rem;
+        width: 4px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgba(255, 222, 165, 0.98), rgba(255, 222, 165, 0.28));
+        opacity: 0.92;
       }
 
       .eyebrow {
-        margin: 0 0 0.85rem;
+        margin: 0 0 0.55rem;
         text-transform: uppercase;
-        letter-spacing: 0.18em;
+        letter-spacing: 0.1em;
         font-size: 0.72rem;
-        font-weight: 700;
-        color: var(--cfm-color-copy-muted, #4c6471);
+        font-weight: 600;
+        color: var(--cfm-color-copy-muted, #46464d);
       }
 
       .header {
         display: grid;
-        gap: 0.55rem;
+        gap: 0.4rem;
       }
 
       h2,
@@ -78,20 +74,22 @@ import { ChangeDetectionStrategy, Component, Input } from "@angular/core";
       }
 
       h2 {
-        font-size: 1.16rem;
-        line-height: 1.25;
-        color: var(--cfm-color-ink, #10222b);
+        font-family: var(--cfm-font-display, Georgia, serif);
+        font-size: 1.3rem;
+        line-height: 1.1;
+        color: var(--cfm-color-ink, #1e2b3a);
+        font-weight: 500;
       }
 
       .description {
-        line-height: 1.6;
+        line-height: 1.45;
         color: var(--cfm-color-copy-muted, #4c6471);
       }
 
       .content {
         display: grid;
-        gap: 1.05rem;
-        margin-top: 1.1rem;
+        gap: 0.8rem;
+        margin-top: 0.72rem;
       }
     `
   ],

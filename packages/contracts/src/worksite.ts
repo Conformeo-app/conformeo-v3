@@ -4,6 +4,15 @@ import type { DocumentLifecycleStatus, DocumentStatus } from "./document";
 export type WorksiteStatus = "planned" | "in_progress" | "blocked" | "completed";
 export type WorksiteCoordinationTargetType = "worksite" | "worksite_document";
 export type WorksiteCoordinationStatus = "todo" | "in_progress" | "done";
+export type WorksiteInterventionType =
+  | "preparation"
+  | "visit"
+  | "team_intervention"
+  | "delivery"
+  | "verification"
+  | "handover";
+export type WorksiteInterventionStatus = "to_schedule" | "planned" | "done" | "canceled";
+export type WorksiteInterventionResult = "completed" | "partial" | "blocked" | "postponed";
 export type WorksiteChecklistItemStatus = "todo" | "done" | "attention";
 export type WorksiteLocalSyncStatus = "local_only" | "pending_sync" | "synced";
 export type WorksiteProofStatus = WorksiteLocalSyncStatus;
@@ -21,6 +30,8 @@ export interface WorksiteCoordinationRecord {
   target_type: WorksiteCoordinationTargetType;
   target_id: EntityId;
   status: WorksiteCoordinationStatus;
+  team_id?: EntityId | null;
+  team_name?: string | null;
   assignee_user_id: EntityId | null;
   assignee_display_name: string | null;
   comment_text: string | null;
@@ -29,8 +40,28 @@ export interface WorksiteCoordinationRecord {
 
 export interface WorksiteCoordinationUpdateRequest {
   status: WorksiteCoordinationStatus;
+  team_id?: EntityId | null;
   assignee_user_id: EntityId | null;
   comment_text: string | null;
+}
+
+export interface WorksiteTeamMemberRecord {
+  user_id: EntityId;
+  display_name: string;
+  role_code: string;
+  role_label: string;
+}
+
+export interface WorksiteTeamRecord {
+  id: EntityId;
+  name: string;
+  description: string | null;
+  member_count: number;
+  members: WorksiteTeamMemberRecord[];
+}
+
+export interface WorksiteTeamMemberAddRequest {
+  user_id: EntityId;
 }
 
 export interface WorksiteAssigneeRecord {
@@ -39,16 +70,78 @@ export interface WorksiteAssigneeRecord {
   role_code: string;
 }
 
+export interface WorksiteInterventionRecord {
+  id: EntityId;
+  organization_id: EntityId;
+  worksite_id: EntityId;
+  intervention_type: WorksiteInterventionType;
+  status: WorksiteInterventionStatus;
+  scheduled_for: IsoDateTime | null;
+  completed_at: IsoDateTime | null;
+  result: WorksiteInterventionResult | null;
+  team_id: EntityId | null;
+  team_name: string | null;
+  assignee_user_id: EntityId | null;
+  assignee_display_name: string | null;
+  notes: string | null;
+  report_comment: string | null;
+  follow_up_note: string | null;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface WorksiteInterventionCreateRequest {
+  intervention_type: WorksiteInterventionType;
+  status?: WorksiteInterventionStatus;
+  scheduled_for?: IsoDateTime | null;
+  team_id?: EntityId | null;
+  assignee_user_id?: EntityId | null;
+  notes?: string | null;
+  completed_at?: IsoDateTime | null;
+  result?: WorksiteInterventionResult | null;
+  report_comment?: string | null;
+  follow_up_note?: string | null;
+}
+
+export interface WorksiteInterventionUpdateRequest {
+  intervention_type?: WorksiteInterventionType;
+  status?: WorksiteInterventionStatus;
+  scheduled_for?: IsoDateTime | null;
+  team_id?: EntityId | null;
+  assignee_user_id?: EntityId | null;
+  notes?: string | null;
+  completed_at?: IsoDateTime | null;
+  result?: WorksiteInterventionResult | null;
+  report_comment?: string | null;
+  follow_up_note?: string | null;
+}
+
 export interface WorksiteApiSummary {
   id: EntityId;
   organization_id: EntityId;
+  is_persisted?: boolean;
   name: string;
   client_name: string;
   address: string;
   status: WorksiteStatus;
   planned_for: IsoDateTime | null;
   updated_at: IsoDateTime;
+  description?: string | null;
+  site_id?: EntityId | null;
+  site_name?: string | null;
   coordination: WorksiteCoordinationRecord;
+  interventions: WorksiteInterventionRecord[];
+}
+
+export interface WorksiteCreateRequest {
+  name: string;
+  site_id: EntityId | null;
+  status: WorksiteStatus;
+  description?: string | null;
+}
+
+export interface WorksiteStatusUpdateRequest {
+  status: WorksiteStatus;
 }
 
 export interface WorksitePreventionPlanExportRequest {
@@ -141,9 +234,24 @@ export interface WorksiteContact {
 
 export interface WorksiteEquipment {
   id: EntityId;
+  organization_id?: EntityId;
+  worksite_id?: EntityId | null;
+  worksite_name?: string | null;
   name: string;
   type: string;
   status: WorksiteEquipmentStatus;
+}
+
+export interface WorksiteEquipmentCreateRequest {
+  name: string;
+  type: string;
+  status: WorksiteEquipmentStatus;
+}
+
+export interface WorksiteEquipmentMovementCreateRequest {
+  equipment_id: EntityId;
+  movement_type: WorksiteEquipmentMovementType;
+  resulting_status: WorksiteEquipmentStatus;
 }
 
 export interface WorksiteEquipmentMovement {
